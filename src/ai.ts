@@ -8,7 +8,14 @@
 import { jsonSchema, tool, type Tool } from "ai";
 import type { Static, TObject } from "typebox";
 
-import { invokeTool, resultText, validateInput, wireSchema, type ToolDefinition } from "./index.ts";
+import {
+  invokeTool,
+  resultText,
+  ToolDefinitionError,
+  validateInput,
+  wireSchema,
+  type ToolDefinition,
+} from "./index.ts";
 
 /**
  * What an AI SDK tool returns: the executor's details with the text MCP
@@ -52,9 +59,14 @@ export function toAiTool<Input extends TObject, Details>(
       const text = resultText(result);
       if (result.isError) throw new Error(text);
       const { details } = result;
-      return typeof details === "object" && details !== null
-        ? { ...details, text }
-        : { details, text };
+      if (typeof details !== "object" || details === null) return { details, text };
+      if (Object.hasOwn(details, "text")) {
+        // The spread would overwrite one of the two without a sign.
+        throw new ToolDefinitionError(
+          `${definition.name}: details must not have a text field, the AI SDK output adds one`,
+        );
+      }
+      return { ...details, text };
     },
   });
   return built as unknown as Tool<Static<Input>, AiToolOutput<Details>>;
