@@ -34,7 +34,9 @@
 
 ## Stack
 
-Node.js >= 24, TypeScript (strict), obuild, vitest, oxlint + oxfmt through `@agntn/ox`, pnpm.
+Toolchain variant, chosen by Ori (2026-09-30): **obuild + Vite+**. obuild builds (`build.config.ts`, TypeBox bundled into `dist/_chunks/libs/typebox.mjs`); Vite+ 1.0 lints, formats and tests (`vp lint`, `vp fmt`, `vp test`, test API from `vite-plus/test`), configured in one `vite.config.ts` on `@agntn/ox`. `vite` and `vite-plus` come from the pnpm catalog with the `vite` override, as in `_template-vite-plus`; CI installs through `voidzero-dev/setup-vp`. Switching variants did not change `dist` (byte-identical build), and a planted `prefer-readonly-parameter-types` violation proves the type-aware rules run under `vp lint`.
+
+Node.js >= 24, TypeScript (strict), pnpm.
 
 ## Structure
 
