@@ -3,8 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "description": "One tool definition for MCP, Pi, OMP and the AI SDK",
+  "homepage": "https://github.com/agntn/tools#readme",
+  "bugs": "https://github.com/agntn/tools/issues",
   "license": "MIT",
   "author": "oritwoen (https://github.com/oritwoen)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agntn/tools.git"
+  },
   "files": [
     "dist"
   ],
@@ -35,6 +41,7 @@
   "scripts": {
     "build": "obuild",
     "lint": "oxlint . && oxfmt --check .",
+    "lint:fix": "oxlint . --fix && oxfmt .",
     "typecheck": "tsc --noEmit --skipLibCheck",
     "test": "vitest --run"
   },
