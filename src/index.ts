@@ -7,7 +7,7 @@
  * Schema at runtime, so every host receives the same document.
  */
 
-import type { Static, TObject, TSchema } from "typebox";
+import type { Static, TObject } from "typebox";
 
 /**
  * TypeBox builders for tool schemas. Author schemas with this, not with a
@@ -125,12 +125,14 @@ export function defineTool<const Input extends TObject, Details>(
       `${tool.name}: input must be a JSON Schema object; build it with Type from @agntn/tools, not from "typebox"`,
     );
   }
-  assertSchema(tool.name, tool.input);
+  assertSchema(tool.name, wireSchema(tool));
   return tool;
 }
 
+type SchemaNode = Readonly<Record<string, unknown>>;
+
 /**
- * Enforces two rules on the input schema.
+ * Enforces two rules on the input schema, at every depth.
  *
  * A non-empty object must be closed (`additionalProperties: false`), because a
  * misspelled key would otherwise be dropped without a signal: `read_only`
@@ -140,31 +142,78 @@ export function defineTool<const Input extends TObject, Details>(
  * A union of literals must be `Type.Enum`: TypeBox serializes the union as
  * `anyOf` const objects, which triples the wire size, and `Value.Errors`
  * reports it as `must be equal to constant` against the first literal only.
+ *
+ * @param toolName - Tool the schema belongs to, for the error.
+ * @param node - Schema node to check.
+ * @param path - JSON pointer of the node, empty at the root.
  */
-function assertSchema(toolName: string, schema: TSchema, path = ""): void {
-  const node = schema as Record<string, unknown>;
-  const properties = node.properties as Record<string, TSchema> | undefined;
-
-  if (node.type === "object" && properties && Object.keys(properties).length > 0) {
-    if (node.additionalProperties !== false) {
-      throw new ToolDefinitionError(
-        `${toolName}: object at ${path || "/"} must be closed with additionalProperties: false`,
-      );
-    }
-  }
-
-  const anyOf = node.anyOf as Record<string, unknown>[] | undefined;
-  if (anyOf && anyOf.length > 1 && anyOf.every((branch) => "const" in branch)) {
+function assertSchema(toolName: string, node: SchemaNode, path = ""): void {
+  const at = path || "/";
+  if (isOpenObject(node)) {
     throw new ToolDefinitionError(
-      `${toolName}: union of literals at ${path || "/"} must use Type.Enum`,
+      `${toolName}: object at ${at} must be closed with additionalProperties: false`,
     );
   }
+  if (isLiteralUnion(node)) {
+    throw new ToolDefinitionError(`${toolName}: union of literals at ${at} must use Type.Enum`);
+  }
+  for (const [child, childPath] of schemaChildren(node, path)) {
+    assertSchema(toolName, child, childPath);
+  }
+}
 
-  for (const [key, child] of Object.entries(properties ?? {}))
-    assertSchema(toolName, child, `${path}/${key}`);
-  if (node.items && typeof node.items === "object")
-    assertSchema(toolName, node.items as TSchema, `${path}/items`);
-  for (const branch of anyOf ?? []) assertSchema(toolName, branch as TSchema, path);
+/**
+ * @param node - Schema node.
+ * @returns {boolean} Whether the node is an object with properties that accepts other keys.
+ */
+function isOpenObject(node: SchemaNode): boolean {
+  const properties = node.properties as SchemaNode | undefined;
+  return (
+    node.type === "object" &&
+    properties !== undefined &&
+    Object.keys(properties).length > 0 &&
+    node.additionalProperties !== false
+  );
+}
+
+/**
+ * @param node - Schema node.
+ * @returns {boolean} Whether the node is an `anyOf` of two or more constants.
+ */
+function isLiteralUnion(node: SchemaNode): boolean {
+  const anyOf = node.anyOf as readonly SchemaNode[] | undefined;
+  return anyOf !== undefined && anyOf.length > 1 && anyOf.every((branch) => "const" in branch);
+}
+
+/**
+ * @param value - Any schema keyword value.
+ * @returns {boolean} Whether it is a nested schema.
+ */
+function isNode(value: unknown): value is SchemaNode {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * The subschemas a value of this node can reach: properties, record values,
+ * array items and union branches.
+ *
+ * @param node - Schema node.
+ * @param path - JSON pointer of the node.
+ * @returns {Array<[SchemaNode, string]>} Each subschema with its path.
+ */
+function schemaChildren(node: SchemaNode, path: string): Array<[SchemaNode, string]> {
+  const keyed = (keyword: string, childPath: (key: string) => string) =>
+    Object.entries(isNode(node[keyword]) ? node[keyword] : {}).flatMap(
+      ([key, child]): Array<[SchemaNode, string]> =>
+        isNode(child) ? [[child, childPath(key)]] : [],
+    );
+  const branches = Array.isArray(node.anyOf) ? (node.anyOf as readonly unknown[]) : [];
+  return [
+    ...keyed("properties", (key) => `${path}/${key}`),
+    ...keyed("patternProperties", () => `${path}/*`),
+    ...(isNode(node.items) ? [[node.items, `${path}/items`] as [SchemaNode, string]] : []),
+    ...branches.filter(isNode).map((branch): [SchemaNode, string] => [branch, path]),
+  ];
 }
 
 /**
@@ -227,16 +276,26 @@ export function validateInput<Input extends TObject>(
       ? Object.keys(args).filter((key) => !declared.includes(key))
       : [];
   // A closed schema reports each undeclared key again, as `schema is false` at its path.
-  const reported = new Set(unknownKeys.map((key) => `/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`));
+  const reported = new Set(
+    unknownKeys.map((key) => `/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`),
+  );
   const lines = [
     ...unknownKeys.map(
-      (key) => `Invalid arguments: unknown property ${JSON.stringify(key)}; takes ${declared.join(", ")}`,
+      (key) =>
+        `Invalid arguments: unknown property ${JSON.stringify(key)}; takes ${declared.join(", ")}`,
     ),
     ...Value.Errors(tool.input, args)
-      .filter((error) => error.keyword !== "additionalProperties" && !reported.has(error.instancePath))
+      .filter(
+        (error) => error.keyword !== "additionalProperties" && !reported.has(error.instancePath),
+      )
       .map((error) => {
-        const allowed = error.keyword === "enum" ? (error.params as { allowedValues?: unknown }).allowedValues : undefined;
-        const message = Array.isArray(allowed) ? `must be one of ${allowed.join(", ")}` : error.message;
+        const allowed =
+          error.keyword === "enum"
+            ? (error.params as { allowedValues?: unknown }).allowedValues
+            : undefined;
+        const message = Array.isArray(allowed)
+          ? `must be one of ${allowed.join(", ")}`
+          : error.message;
         return `Invalid arguments at ${error.instancePath || "/"}: ${message}`;
       }),
   ];

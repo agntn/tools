@@ -26,12 +26,18 @@ import {
 type TextComponent = typeof HostText;
 type Component = ReturnType<NonNullable<OmpToolDefinition["renderCall"]>>;
 
+/** The part of a host result a renderer reads. */
+export interface OmpResultView {
+  readonly details?: unknown;
+  readonly isError?: boolean;
+}
+
 /** Per-tool renderer overrides, drawn with the host theme. */
 export interface OmpRenderers {
   /** One-line summary of the arguments after the title. Sanitized by the adapter. */
-  describeCall?(args: Record<string, unknown>): unknown;
+  describeCall?(args: Readonly<Record<string, unknown>>): unknown;
   /** Short metadata after the badge, one entry per fact. Each entry is sanitized. */
-  describeResult?(result: AgentToolResult<unknown>): readonly unknown[];
+  describeResult?(result: OmpResultView): readonly unknown[];
 }
 
 export interface OmpToolOptions {
@@ -117,6 +123,10 @@ export function registerOmpTools(
  *
  * Drawn with the host theme on purpose: compiled OMP injects only the package
  * root, so importing `@oh-my-pi/pi-coding-agent/tui` would stop the extension.
+ *
+ * @param options - Render options from the host.
+ * @param theme - Host theme.
+ * @returns {string} The styled icon.
  */
 function callIcon(options: ToolRenderResultOptions, theme: Theme): string {
   if (!options.isPartial) return theme.styledSymbol("status.done", "success");

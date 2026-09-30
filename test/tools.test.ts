@@ -85,6 +85,24 @@ describe("defineTool", () => {
     ).toThrow(/Type\.Enum/);
   });
 
+  it("finds a union of literals inside a record value", () => {
+    expect(() =>
+      defineTool({
+        name: "demo_record",
+        title: "Record",
+        description: "x",
+        effect: "read",
+        input: Type.Object(
+          {
+            options: Type.Record(Type.String(), Type.Union([Type.Literal("a"), Type.Literal("b")])),
+          },
+          { additionalProperties: false },
+        ),
+        execute: () => ({ content: [], details: null }),
+      }),
+    ).toThrow("union of literals at /options/* must use Type.Enum");
+  });
+
   it("rejects a callable schema, the shape OMP's typebox remap produces", () => {
     const shape = Type.Object({ a: Type.String() }, { additionalProperties: false });
     const callable: typeof shape = Object.assign(() => true, shape);
@@ -162,7 +180,7 @@ describe("MCP adapter", () => {
 
   it("passes success, returned failure, validation failure and thrown failure", async () => {
     const client = await mcpClient();
-    const call = (args: Record<string, unknown>) =>
+    const call = (args: Readonly<Record<string, unknown>>) =>
       client.callTool({ name: "demo_echo", arguments: args });
 
     expect(await call({ word: "hi", mode: "loud" })).toMatchObject({ content: [{ text: "HI" }] });
