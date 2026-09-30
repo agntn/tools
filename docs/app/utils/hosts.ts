@@ -290,7 +290,7 @@ export async function hostViews(tool: ToolDefinition = slugTool): Promise<HostVi
   const hints = Object.entries(toolAnnotations(tool))
     .filter(([, on]) => on === true)
     .map(([hint]) => hint.replace(/Hint$/u, ""))
-    .join(" · ");
+    .join(", ");
   const pi = piRegistration(tool);
   const omp = ompRegistration(tool);
   const ai = toAiTool(tool);
@@ -302,8 +302,8 @@ export async function hostViews(tool: ToolDefinition = slugTool): Promise<HostVi
       rows: [
         { label: "title", value: String(listed.title) },
         { label: "hints", value: hints, accent: true },
-        { label: "inputSchema", value: `${keys} · closed` },
-        { label: "failure", value: "isError: true, one line per problem" },
+        { label: "inputSchema", value: keys },
+        { label: "failure", value: "isError: true" },
       ],
       registration: printRegistration(listed),
       fields: fieldsOf(listed),
@@ -312,9 +312,15 @@ export async function hostViews(tool: ToolDefinition = slugTool): Promise<HostVi
       key: "pi",
       rows: [
         { label: "label", value: String(pi.label) },
-        { label: "promptSnippet", value: String(pi.promptSnippet), accent: true },
-        { label: "parameters", value: `${keys} · same JSON Schema` },
-        { label: "failure", value: "thrown, old Pi ignores isError" },
+        {
+          label: "prompt",
+          value: ((count: number) => `snippet, ${count} rule${count === 1 ? "" : "s"}`)(
+            (pi.promptGuidelines as unknown[] | undefined)?.length ?? 0,
+          ),
+          accent: true,
+        },
+        { label: "parameters", value: keys },
+        { label: "failure", value: "thrown" },
       ],
       registration: printRegistration(pi),
       fields: fieldsOf(pi),
@@ -324,8 +330,8 @@ export async function hostViews(tool: ToolDefinition = slugTool): Promise<HostVi
       rows: [
         { label: "label", value: String(omp.label) },
         { label: "approval", value: String(omp.approval), accent: true },
-        { label: "parameters", value: "Type.Unsafe(schema), validated by the host" },
-        { label: "failure", value: "isError returned, bad input thrown" },
+        { label: "parameters", value: "Type.Unsafe(json)" },
+        { label: "failure", value: "isError or thrown" },
       ],
       registration: printRegistration(omp),
       fields: fieldsOf(omp),
@@ -334,9 +340,9 @@ export async function hostViews(tool: ToolDefinition = slugTool): Promise<HostVi
       key: "ai",
       rows: [
         { label: "title", value: String(ai.title) },
-        { label: "inputSchema", value: `jsonSchema() · ${Object.keys(aiSchema.properties ?? {}).join(", ")}`, accent: true },
-        { label: "output", value: "{ ...details, text }" },
-        { label: "failure", value: "thrown, becomes a tool error" },
+        { label: "inputSchema", value: "jsonSchema()", accent: true },
+        { label: "output", value: "details + text" },
+        { label: "failure", value: "thrown" },
       ],
       registration: printRegistration({ ...ai, inputSchema: aiSchema }),
       fields: fieldsOf(ai),

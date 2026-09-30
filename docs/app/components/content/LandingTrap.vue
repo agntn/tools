@@ -1,16 +1,15 @@
 <script setup lang="ts">
-/** Measured on compiled OMP 18.4.4: hyperfine medians of `omp models` with one extension loaded. */
-const BEFORE = [
-  { label: "import", value: 'import { Type } from "typebox"' },
-  { label: "schema", value: "a function, not JSON Schema", danger: true },
-  { label: "Value.Check", value: "true, for anything at all", danger: true },
-  { label: "start cost", value: "+200 ms, 688 modules", danger: true },
-];
-const AFTER = [
-  { label: "import", value: 'import { Type } from "@agntn/tools"' },
-  { label: "OMP schema", value: "pi.typebox.Type.Unsafe(json)" },
-  { label: "bad input", value: "refused by OMP and by the core", accent: true },
-  { label: "start cost", value: "+20 ms, inside the noise", accent: true },
+/**
+ * A bare `typebox` import in an OMP extension against `Type` from `@agntn/tools`, row by row. Start
+ * cost measured on compiled OMP 18.4.4: hyperfine medians of `omp models` with one extension loaded.
+ */
+const ROWS = [
+  { label: "import", before: '"typebox"', after: '"@agntn/tools"' },
+  { label: "schema", before: "a function", after: "JSON Schema" },
+  { label: "Value.Check", before: "always true", after: "a real answer" },
+  { label: "bad input", before: "accepted", after: "refused" },
+  { label: "loaded", before: "688 modules", after: "1 chunk" },
+  { label: "start cost", before: "+200 ms", after: "+20 ms" },
 ];
 </script>
 
@@ -28,23 +27,17 @@ const AFTER = [
 
     <div class="trap-body">
       <p class="console-label console-rule-title">
-        <span>Before <span aria-hidden="true">[ a bare typebox import ]</span></span>
+        <span>Before → after <span aria-hidden="true">[ bare typebox, then @agntn/tools ]</span></span>
         <span class="console-mark" aria-hidden="true" />
       </p>
       <dl class="console-readout-rows trap-rows">
-        <div v-for="row in BEFORE" :key="row.label">
+        <div v-for="row in ROWS" :key="row.label">
           <dt>{{ row.label }}</dt>
-          <dd :class="{ 'trap-danger': row.danger }">{{ row.value }}</dd>
-        </div>
-      </dl>
-      <p class="console-label console-rule-title">
-        <span>After <span aria-hidden="true">[ Type from @agntn/tools ]</span></span>
-        <span class="console-mark" aria-hidden="true" />
-      </p>
-      <dl class="console-readout-rows trap-rows">
-        <div v-for="row in AFTER" :key="row.label">
-          <dt>{{ row.label }}</dt>
-          <dd :class="{ 'console-accent': row.accent }">{{ row.value }}</dd>
+          <dd class="trap-pair">
+            <span class="trap-danger">{{ row.before }}</span>
+            <span class="trap-arrow" aria-hidden="true">→</span>
+            <span class="trap-after">{{ row.after }}</span>
+          </dd>
         </div>
       </dl>
     </div>
@@ -68,10 +61,22 @@ const AFTER = [
   text-transform: none;
   letter-spacing: 0.02em;
 }
-.landing-trap .trap-rows dd {
+.trap-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  white-space: nowrap;
+}
+.trap-pair > span {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.trap-arrow {
+  color: var(--ui-text-dimmed);
+}
+.trap-after {
+  color: var(--console-accent);
 }
 .trap-danger {
   color: #ff7b72;

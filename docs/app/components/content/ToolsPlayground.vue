@@ -111,9 +111,9 @@ const CHANNEL: Record<HostAnswer["channel"], string> = {
           v-model="source"
           variant="none"
           :rows="7"
-          autoresize
           aria-label="Tool arguments as JSON"
           class="playground-source"
+          :ui="{ base: 'h-full resize-none' }"
         />
         <UAlert
           v-if="!parsed.ok"
@@ -168,6 +168,15 @@ const CHANNEL: Record<HostAnswer["channel"], string> = {
   align-content: start;
   gap: 12px;
   min-width: 0;
+}
+/* The two columns end on one line: the arguments field takes whatever height the hosts leave. */
+.playground-input {
+  grid-template-rows: auto auto minmax(10rem, 1fr) auto;
+  align-content: stretch;
+}
+.playground-source {
+  height: 100%;
+  box-shadow: inset 0 0 0 1px var(--ui-border-muted);
 }
 .playground-presets {
   display: flex;

@@ -11,7 +11,7 @@ const view = computed(() => views.value?.find((entry) => entry.key === props.nam
 </script>
 
 <template>
-  <section class="tool-console console-wide not-prose my-6" aria-label="Host record">
+  <section class="tool-console console-wide host-facts not-prose my-6" aria-label="Host record">
     <span class="console-cross console-cross-tl" aria-hidden="true">+</span>
     <span class="console-cross console-cross-br" aria-hidden="true">+</span>
 
@@ -100,6 +100,10 @@ const view = computed(() => views.value?.find((entry) => entry.key === props.nam
 </template>
 
 <style scoped>
+/* Same label column as the landing's readout, so the longest value (MCP hints) fits. */
+.host-facts :deep(.console-readout-rows > div) {
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+}
 .host-line {
   display: block;
   overflow: hidden;

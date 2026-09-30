@@ -12,11 +12,16 @@ const sample = computed(() => props.cases[props.caseIndex]!);
 const answer = computed(() => props.answers?.[props.caseIndex]);
 const call = computed(() => `text_slug(${JSON.stringify(sample.value.args)})`);
 
-/** What the core says before any host sees the call, or what execute said when the input was fine. */
+/** What happened to the call: refused by the core, failed in execute, or answered. */
 const verdict = computed(() => {
-  if (sample.value.problems.length > 0) return sample.value.problems;
+  if (sample.value.problems.length > 0) {
+    return { word: "refused", name: "Refused before execute", icon: "i-lucide-circle-x", line: sample.value.problems.join(" ") };
+  }
   const mcp = answer.value?.mcp;
-  return mcp?.failed ? [mcp.text] : ["Nothing wrong with it."];
+  if (mcp?.failed) {
+    return { word: "isError", name: "Failed inside execute", icon: "i-lucide-triangle-alert", line: mcp.text };
+  }
+  return { word: "ok", name: "Answered", icon: "i-lucide-circle-check", line: "Nothing wrong with it. Every host gets the slug." };
 });
 </script>
 
@@ -44,36 +49,36 @@ const verdict = computed(() => {
       <span :key="sample.label" class="console-cursor" />
     </div>
 
-    <div class="check-body">
-      <p class="console-label console-rule-title">
-        <span>Core <span aria-hidden="true">[ validateInput, then execute ]</span></span>
-        <span class="console-mark" aria-hidden="true" />
-      </p>
-      <ul :key="sample.label" class="check-lines console-animate">
-        <li v-for="line in verdict" :key="line" :class="{ 'check-ok': sample.problems.length === 0 && !answer?.mcp.failed }">
-          {{ line }}
-        </li>
-      </ul>
-
-      <p class="console-label console-rule-title">
-        <span>Hosts <span aria-hidden="true">[ channel · what the model reads ]</span></span>
-        <span class="console-mark" aria-hidden="true" />
-      </p>
-      <dl :key="sample.label" class="console-readout-rows console-animate check-hosts">
-        <div v-for="(host, index) in HOSTS" :key="host.key" :style="{ animationDelay: `${index * 45}ms` }">
-          <dt>{{ host.short }}</dt>
-          <dd>
-            <UTooltip :text="answer?.[host.key].text ?? ''">
-              <span class="check-line"
-                ><span :class="answer?.[host.key].failed ? 'check-fail' : 'console-accent'">{{
-                  answer?.[host.key].channel ?? "…"
-                }}</span>
-                {{ answer?.[host.key].text }}</span
-              >
-            </UTooltip>
-          </dd>
+    <!-- The verdict on the crosses grid, then what each host ends up with in the readout. -->
+    <div class="check-subject">
+      <div :key="sample.label" class="console-scan" aria-hidden="true" />
+      <div class="check-identity">
+        <ConsoleReticle :key="sample.label" :icon="verdict.icon" />
+        <div class="check-name">
+          <span class="console-label">Core / <span class="console-label-key">{{ verdict.word }}</span></span>
+          <h3>{{ verdict.name }}</h3>
+          <UTooltip :text="verdict.line">
+            <p class="check-note" :class="{ 'check-fail': verdict.word !== 'ok' }" tabindex="0">{{ verdict.line }}</p>
+          </UTooltip>
         </div>
-      </dl>
+      </div>
+      <div class="console-readout">
+        <dl :key="sample.label" class="console-readout-rows console-animate check-hosts">
+          <div v-for="(host, index) in HOSTS" :key="host.key" :style="{ animationDelay: `${index * 45}ms` }">
+            <dt>{{ host.short }}</dt>
+            <dd>
+              <UTooltip :text="answer?.[host.key].text ?? ''">
+                <span class="check-line" tabindex="0"
+                  ><span :class="answer?.[host.key].failed ? 'check-fail' : 'console-accent'">{{
+                    answer?.[host.key].channel ?? "…"
+                  }}</span>
+                  {{ answer?.[host.key].text }}</span
+                >
+              </UTooltip>
+            </dd>
+          </div>
+        </dl>
+      </div>
     </div>
 
     <ConsoleResponse v-if="answer" :title="call" :text="answer.mcp.text" />
@@ -103,28 +108,53 @@ const verdict = computed(() => {
 </template>
 
 <style scoped>
-.check-body {
+.check-subject {
+  position: relative;
   display: grid;
   gap: 12px;
-  padding: 14px 20px 18px;
+  padding: 14px 20px 14px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36'%3E%3Cpath d='M16 18h4m-2-2v4' fill='none' stroke='%23818a94' stroke-opacity='.1'/%3E%3C/svg%3E");
+  background-size: 36px 36px;
+  background-position: 24px 20px;
 }
-.check-lines {
+.check-subject > :not(.console-scan) {
+  position: relative;
+}
+.check-identity {
   display: grid;
-  gap: 6px;
-  min-height: 3.2em;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: #ff7b72;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
 }
-.check-lines .check-ok {
+.check-name {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.check-name h3 {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.2;
   color: var(--ui-text-highlighted);
+}
+/* One sentence, two lines at most: the full core line lives in the tooltip and the dialog. */
+.check-note {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ui-text-muted);
 }
 .landing-check .check-hosts > div {
   grid-template-columns: 4.5rem minmax(0, 1fr);
+  min-height: 0;
+  padding-block: 5px;
 }
 .landing-check .check-hosts dt {
   text-transform: none;
@@ -147,8 +177,12 @@ const verdict = computed(() => {
   gap: 6px;
 }
 @media (width < 400px) {
-  .check-body {
+  .check-subject {
     padding-inline: 14px;
+  }
+  .check-identity {
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 12px;
   }
 }
 </style>

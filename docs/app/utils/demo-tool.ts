@@ -20,13 +20,10 @@ export const slugTool = defineTool({
   snippet: "Use text_slug to turn a title into a URL slug.",
   guidelines: ["Pass separator '_' for identifiers. The default '-' is for URLs."],
   effect: "read",
-  input: Type.Object(
-    {
-      text: Type.String({ minLength: 1, maxLength: 200, pattern: "\\S", description: "Title to slug" }),
-      separator: Type.Optional(Type.Enum(SEPARATORS, { description: "Joins the words. '-' when omitted" })),
-    },
-    { additionalProperties: false },
-  ),
+  input: Type.Object({
+    text: Type.String({ minLength: 1, maxLength: 200, pattern: "\\S", description: "Title to slug" }),
+    separator: Type.Optional(Type.Enum(SEPARATORS, { description: "Joins the words. '-' when omitted" })),
+  }, { additionalProperties: false }),
   execute({ text, separator = "-" }) {
     const words =
       text

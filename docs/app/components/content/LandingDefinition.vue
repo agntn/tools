@@ -57,7 +57,7 @@ const lines = [
 
 <style scoped>
 .file-body {
-  padding: 14px 20px 18px;
+  padding: 12px 20px 14px;
 }
 .file-lines {
   margin: 12px 0 0;
