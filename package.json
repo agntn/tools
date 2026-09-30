@@ -1,0 +1,80 @@
+{
+  "name": "@agntn/tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "One tool definition for MCP, Pi, OMP and the AI SDK",
+  "license": "MIT",
+  "author": "oritwoen (https://github.com/oritwoen)",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.mts",
+      "import": "./dist/mcp.mjs"
+    },
+    "./pi": {
+      "types": "./dist/pi.d.mts",
+      "import": "./dist/pi.mjs"
+    },
+    "./omp": {
+      "types": "./dist/omp.d.mts",
+      "import": "./dist/omp.mjs"
+    },
+    "./ai": {
+      "types": "./dist/ai.d.mts",
+      "import": "./dist/ai.mjs"
+    }
+  },
+  "scripts": {
+    "build": "obuild",
+    "lint": "oxlint . && oxfmt --check .",
+    "typecheck": "tsc --noEmit --skipLibCheck",
+    "test": "vitest --run"
+  },
+  "devDependencies": {
+    "@agntn/ox": "0.1.0",
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@oh-my-pi/pi-coding-agent": "18.0.0",
+    "@types/node": "26.2.0",
+    "ai": "7.0.66",
+    "obuild": "0.4.38",
+    "oxfmt": "0.63.0",
+    "oxlint": "1.78.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "typebox": "1.3.14",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.2 <1",
+    "@modelcontextprotocol/sdk": ">=1.30.0 <2",
+    "@oh-my-pi/pi-coding-agent": ">=18.0.0 <19",
+    "ai": ">=7.0.0 <8"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@oh-my-pi/pi-coding-agent": {
+      "optional": true
+    },
+    "ai": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.22.0"
+}
