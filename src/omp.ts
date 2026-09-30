@@ -38,6 +38,11 @@ export interface OmpRenderers {
   describeCall?(args: Readonly<Record<string, unknown>>): unknown;
   /** Short metadata after the badge, one entry per fact. Each entry is sanitized. */
   describeResult?(result: OmpResultView): readonly unknown[];
+  /**
+   * Replaces the result status line with the package's own component, such as
+   * a bounded preview of long output. It owns sanitizing what it draws.
+   */
+  renderResult?: OmpToolDefinition["renderResult"];
 }
 
 export interface OmpToolOptions {
@@ -98,7 +103,9 @@ export function registerOmpTools(
           0,
         );
       },
-      renderResult(result, _renderOptions, theme): Component {
+      renderResult(result, renderOptions, theme, args): Component {
+        if (renderers?.renderResult)
+          return renderers.renderResult(result, renderOptions, theme, args);
         const icon = result.isError
           ? theme.styledSymbol("status.error", "error")
           : theme.styledSymbol("status.done", "success");

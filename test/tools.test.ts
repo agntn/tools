@@ -238,4 +238,21 @@ describe("AI SDK adapter", () => {
     await expect(tool.execute({ word: "fail" }, options)).rejects.toThrow("cannot echo fail");
     expect(Object.keys(toAiTools([echo]))).toEqual(["demo_echo"]);
   });
+
+  it("refuses details with a text field instead of overwriting it", async () => {
+    const clash = defineTool({
+      name: "demo_clash",
+      title: "Clash",
+      description: "x",
+      effect: "read",
+      input: Type.Object({}),
+      execute: () => ({ content: [{ type: "text", text: "shown" }], details: { text: "slice" } }),
+    });
+    const tool = toAiTool(clash);
+    if (!tool.execute) throw new Error("tool not executable");
+
+    await expect(tool.execute({}, { toolCallId: "1", messages: [], context: {} })).rejects.toThrow(
+      "details must not have a text field",
+    );
+  });
 });

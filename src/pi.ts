@@ -5,7 +5,11 @@
  * from the host at runtime.
  */
 
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ToolDefinition as PiToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 
 import { invokeTool, resultText, type ToolDefinition } from "./index.ts";
 
@@ -19,14 +23,19 @@ export interface PiToolOptions {
    * only with a peer range of `>=0.99.0`, since Pi does not check peer ranges.
    */
   readonly failures?: "throw" | "return";
+  /** Host renderers by tool name, passed to Pi unchanged. */
+  readonly renderers?: Readonly<Record<string, PiRenderers>>;
 }
+
+/** The host's own call and result renderers for one tool. */
+export type PiRenderers = Pick<PiToolDefinition, "renderCall" | "renderResult">;
 
 /**
  * Registers every tool on the Pi extension API.
  *
  * @param pi - Pi extension API.
  * @param tools - Tools to register.
- * @param options - Failure policy.
+ * @param options - Failure policy and renderers.
  */
 export function registerPiTools(
   pi: ExtensionAPI,
@@ -36,7 +45,11 @@ export function registerPiTools(
   const failures = options.failures ?? "throw";
 
   for (const tool of tools) {
+    const renderers = Object.hasOwn(options.renderers ?? {}, tool.name)
+      ? options.renderers?.[tool.name]
+      : undefined;
     pi.registerTool({
+      ...renderers,
       name: tool.name,
       label: tool.title,
       description: tool.description,
