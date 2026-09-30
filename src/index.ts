@@ -17,6 +17,13 @@ import type { Static, TObject, TSchema } from "typebox";
  * Subpaths such as `typebox/type` are left alone.
  */
 export * as Type from "typebox/type";
+
+/**
+ * Every schema type of the same bundled TypeBox build. Import them from here, not from `typebox`.
+ * All of them, not a few: a package that exports a tool definition needs each type its schema
+ * uses to be nameable in its declarations.
+ */
+export type * from "typebox";
 import { stripVTControlCharacters } from "node:util";
 
 import { Value } from "typebox/value";
@@ -85,6 +92,16 @@ export class ToolDefinitionError extends Error {
 /** Thrown by {@link invokeTool} when the arguments fail the tool schema. */
 export class ToolInputError extends Error {
   override name = "ToolInputError";
+  /** One validation failure per line. Only these line breaks are the core's own. */
+  readonly lines: readonly string[];
+
+  /**
+   * @param lines - One validation failure per line.
+   */
+  constructor(lines: readonly string[]) {
+    super(lines.join("\n"));
+    this.lines = lines;
+  }
 }
 
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
@@ -183,17 +200,20 @@ export function indexTools(tools: readonly ToolDefinition[]): ReadonlyMap<string
 
 export type InputCheck<Input extends TObject> =
   | { ok: true; value: Static<Input> }
-  | { ok: false; message: string };
+  | { ok: false; lines: readonly string[] };
 
 /**
  * Validates arguments against the tool schema, reporting every failure.
  *
  * Runs on every surface, not only MCP: a host may skip its own validation, and
- * OMP's omptype drops `pattern` from the schema it emits.
+ * OMP's omptype drops `pattern` from the schema it emits. The message has one
+ * line per failure: an undeclared key names itself with the keys the tool
+ * takes, and an enum failure names the allowed values, so the caller does not
+ * go back to the tool list and guess. Format from agntn/hashes (#58).
  *
  * @param tool - Tool whose schema applies.
  * @param args - Arguments as received from the host.
- * @returns {InputCheck<Input>} The typed value, or one message naming each failure.
+ * @returns {InputCheck<Input>} The typed value, or the failures, one per line.
  */
 export function validateInput<Input extends TObject>(
   tool: ToolDefinition<Input, unknown>,
@@ -201,34 +221,26 @@ export function validateInput<Input extends TObject>(
 ): InputCheck<Input> {
   if (Value.Check(tool.input, args)) return { ok: true, value: args };
 
-  const accepted = Object.keys(tool.input.properties);
-  const lines: string[] = [];
+  const declared = Object.keys(tool.input.properties);
   const unknownKeys =
     args !== null && typeof args === "object" && !Array.isArray(args)
-      ? Object.keys(args).filter((key) => !Object.hasOwn(tool.input.properties, key))
+      ? Object.keys(args).filter((key) => !declared.includes(key))
       : [];
-  for (const key of unknownKeys) {
-    lines.push(
-      `at /: unknown property ${JSON.stringify(key)} (accepted: ${accepted.join(", ") || "none"})`,
-    );
-  }
-
-  for (const error of Value.Errors(tool.input, args)) {
-    // The closed-object failure is already reported above with the offending key.
-    if (error.keyword === "additionalProperties") continue;
-    const at = error.instancePath || "/";
-    const params = error.params as { allowedValues?: unknown[] } | undefined;
-    lines.push(
-      error.keyword === "enum" && params?.allowedValues
-        ? `at ${at}: must be one of ${params.allowedValues.map((value) => JSON.stringify(value)).join(", ")}`
-        : `at ${at}: ${error.message}`,
-    );
-  }
-
-  return {
-    ok: false,
-    message: `Invalid arguments ${[...new Set(lines)].join("; ") || "rejected by schema"}`,
-  };
+  // A closed schema reports each undeclared key again, as `schema is false` at its path.
+  const reported = new Set(unknownKeys.map((key) => `/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`));
+  const lines = [
+    ...unknownKeys.map(
+      (key) => `Invalid arguments: unknown property ${JSON.stringify(key)}; takes ${declared.join(", ")}`,
+    ),
+    ...Value.Errors(tool.input, args)
+      .filter((error) => error.keyword !== "additionalProperties" && !reported.has(error.instancePath))
+      .map((error) => {
+        const allowed = error.keyword === "enum" ? (error.params as { allowedValues?: unknown }).allowedValues : undefined;
+        const message = Array.isArray(allowed) ? `must be one of ${allowed.join(", ")}` : error.message;
+        return `Invalid arguments at ${error.instancePath || "/"}: ${message}`;
+      }),
+  ];
+  return { ok: false, lines: lines.length > 0 ? [...new Set(lines)] : ["Invalid arguments"] };
 }
 
 /**
@@ -246,7 +258,7 @@ export async function invokeTool(
   context: ToolCallContext = {},
 ): Promise<ToolResult> {
   const checked = validateInput(tool, args);
-  if (!checked.ok) throw new ToolInputError(checked.message);
+  if (!checked.ok) throw new ToolInputError(checked.lines);
   return await tool.execute(checked.value, context);
 }
 

@@ -45,13 +45,15 @@ export function toolAnnotations(tool: ToolDefinition): ToolAnnotations {
  * Error result with every line-forging character replaced.
  *
  * The messages echo client-controlled values (a tool name, an argument) and
- * downstream error text, so they pass through here on every branch.
+ * downstream error text, so they pass through here on every branch. Each line
+ * is cleaned on its own, so only the breaks between the lines passed in
+ * survive; a newline inside one line becomes a space.
  *
- * @param text - Error text.
+ * @param lines - Error lines.
  * @returns {CallToolResult} MCP error result.
  */
-export function errorResult(text: string): CallToolResult {
-  return { content: [{ type: "text", text: sanitizeLine(text) }], isError: true };
+export function errorResult(...lines: readonly string[]): CallToolResult {
+  return { content: [{ type: "text", text: lines.map(sanitizeLine).join("\n") }], isError: true };
 }
 
 /**
@@ -101,7 +103,7 @@ export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinit
         ...(result.isError === undefined ? {} : { isError: result.isError }),
       };
     } catch (error) {
-      if (error instanceof ToolInputError) return errorResult(error.message);
+      if (error instanceof ToolInputError) return errorResult(...error.lines);
       return errorResult(
         `${tool.name} failed: ${error instanceof Error ? error.message : String(error)}`,
       );

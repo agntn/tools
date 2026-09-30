@@ -3,7 +3,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { asSchema } from "ai";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { toAiTools } from "../src/ai.ts";
+import { toAiTool, toAiTools } from "../src/ai.ts";
 import {
   defineTool,
   indexTools,
@@ -107,19 +107,21 @@ describe("defineTool", () => {
 });
 
 describe("validateInput", () => {
-  it("names the unknown key, the accepted keys and every other failure", () => {
+  it("names the unknown key with the keys it takes, then every other failure, one per line", () => {
     const checked = validateInput(echo, { wrod: "x", mode: "quiet" });
 
-    expect(checked.ok).toBe(false);
-    const message = checked.ok ? "" : checked.message;
-    expect(message).toContain('unknown property "wrod" (accepted: word, mode)');
-    expect(message).toContain("at /: must have required properties word");
-    expect(message).toContain('at /mode: must be one of "plain", "loud"');
+    expect(checked.ok ? [] : checked.lines).toEqual([
+      'Invalid arguments: unknown property "wrod"; takes word, mode',
+      "Invalid arguments at /: must have required properties word",
+      "Invalid arguments at /mode: must be one of plain, loud",
+    ]);
   });
 
   it("reports the pattern at the property path", () => {
     const checked = validateInput(echo, { word: "a.b" });
-    expect(checked.ok ? "" : checked.message).toMatch(/^Invalid arguments at \/word: /);
+    expect(checked.ok ? [] : checked.lines).toEqual([
+      'Invalid arguments at /word: must match pattern "^[a-z]+$"',
+    ]);
   });
 });
 
@@ -176,6 +178,27 @@ describe("MCP adapter", () => {
     });
   });
 
+  it("keeps one line per validation failure and folds a newline inside a value", async () => {
+    const client = await mcpClient();
+    const answer = await client.callTool({
+      name: "demo_echo",
+      arguments: { word: "hi", mode: "x", "bad\nkey": 1 },
+    });
+
+    expect(answer).toEqual({
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: [
+            'Invalid arguments: unknown property "bad\\nkey"; takes word, mode',
+            "Invalid arguments at /mode: must be one of plain, loud",
+          ].join("\n"),
+        },
+      ],
+    });
+  });
+
   it("treats prototype names as unknown tools", async () => {
     const client = await mcpClient();
     expect(await client.callTool({ name: "toString", arguments: {} })).toEqual({
@@ -186,20 +209,16 @@ describe("MCP adapter", () => {
 });
 
 describe("AI SDK adapter", () => {
-  it("validates through the shared validator and maps failures to error text", async () => {
-    const tool = toAiTools([echo]).demo_echo;
-    if (!tool?.execute || !tool.toModelOutput) throw new Error("tool not executable");
+  it("validates through the shared validator and returns details with the text", async () => {
+    const tool = toAiTool(echo);
+    if (!tool.execute) throw new Error("tool not executable");
     const schema = asSchema(tool.inputSchema);
+    const options = { toolCallId: "1", messages: [], context: {} };
 
     expect(schema.jsonSchema).toEqual(JSON.parse(JSON.stringify(echo.input)));
-    const rejected = await schema.validate?.({ word: "a.b" });
-    expect(rejected?.success).toBe(false);
-
-    const options = { toolCallId: "1", messages: [], context: {} };
-    const output = (await tool.execute({ word: "fail" }, options)) as ToolResult;
-    expect(await tool.toModelOutput({ toolCallId: "1", input: { word: "fail" }, output })).toEqual({
-      type: "error-text",
-      value: "cannot echo fail",
-    });
+    expect((await schema.validate?.({ word: "a.b" }))?.success).toBe(false);
+    expect(await tool.execute({ word: "hi" }, options)).toEqual({ word: "hi", text: "hi" });
+    await expect(tool.execute({ word: "fail" }, options)).rejects.toThrow("cannot echo fail");
+    expect(Object.keys(toAiTools([echo]))).toEqual(["demo_echo"]);
   });
 });

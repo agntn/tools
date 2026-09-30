@@ -98,7 +98,9 @@ export function registerOmpTools(
           : theme.styledSymbol("status.done", "success");
         const { bracketLeft, bracketRight } = theme.format;
         const badge = theme.fg("accent", `${bracketLeft}${APPROVAL[tool.effect]}${bracketRight}`);
-        const facts = renderers?.describeResult?.(result).map(sanitizeLine).filter(Boolean) ?? [];
+        const facts = result.isError
+          ? []
+          : (renderers?.describeResult?.(result).map(sanitizeLine).filter(Boolean) ?? []);
         const meta = facts.length > 0 ? ` ${theme.fg("dim", facts.join(theme.sep.dot))}` : "";
         return new Text(
           `${icon} ${theme.fg("accent", sanitizeLine(tool.title))} ${badge}${meta}`,
