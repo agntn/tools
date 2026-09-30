@@ -54,6 +54,18 @@ export default defineNuxtConfig({
       "One tool definition served to MCP, Pi, OMP and the AI SDK. TypeBox schema, validation on every surface, errors that stay on one line.",
     sections: [
       {
+        title: "MCP",
+        description: "The pages of this site over Streamable HTTP, for an agent that reads docs.",
+        links: [
+          {
+            title: "MCP endpoint",
+            href: "https://tools.agntn.dev/mcp",
+            description:
+              "Add it to any MCP client as an HTTP server, for example `claude mcp add --transport http tools https://tools.agntn.dev/mcp`.",
+          },
+        ],
+      },
+      {
         title: "Playground",
         description: "One call sent to all four hosts at once, in the browser.",
         links: [
@@ -137,12 +149,15 @@ export default defineNuxtConfig({
       ],
     },
   },
-  /** Docus ships an MCP endpoint that wants the Cloudflare Agents SDK on Workers. Not needed. */
-  mcp: {
-    enabled: false,
-  },
   nitro: {
     preset: "cloudflare_module",
+    /**
+     * One MCP SDK in the worker. The Docus toolkit builds its server from one copy and `agents` checks it
+     * with `instanceof` against another. pnpm splits them by the `@cfworker/json-schema` peer.
+     */
+    alias: {
+      "@modelcontextprotocol/sdk": resolve(import.meta.dirname, "node_modules/@modelcontextprotocol/sdk/dist/esm"),
+    },
     compatibilityDate: "2026-09-03",
     esbuild: { options: { target: "es2024" } },
     prerender: {
