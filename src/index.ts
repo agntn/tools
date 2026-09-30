@@ -24,7 +24,6 @@ export * as Type from "typebox/type";
  * uses to be nameable in its declarations.
  */
 export type * from "typebox";
-import { stripVTControlCharacters } from "node:util";
 
 import { Value } from "typebox/value";
 
@@ -324,6 +323,13 @@ export async function invokeTool(
 const LINE_BREAKING = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
 /**
+ * Terminal escape sequences, the pattern Node 26 uses in `stripVTControlCharacters`.
+ * Kept here rather than imported from `node:util` so the core runs in a browser or a worker.
+ */
+const ESCAPE_SEQUENCE =
+  /(?:\u001B\][\s\S]*?(?:\u0007|\u001B\u005C|\u009C))|[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]/g;
+
+/**
  * Makes a value safe for one line of terminal or protocol text.
  *
  * Removes escape sequences, then replaces every control, format, line and
@@ -335,7 +341,8 @@ const LINE_BREAKING = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
  * @returns {string} Single-line text.
  */
 export function sanitizeLine(value: unknown): string {
-  return stripVTControlCharacters(String(value))
+  return String(value)
+    .replaceAll(ESCAPE_SEQUENCE, "")
     .replaceAll(LINE_BREAKING, " ")
     .replaceAll(/ {2,}/g, " ")
     .trim();

@@ -7,7 +7,7 @@ import { defineConfig } from "vite-plus";
  * bundles TypeBox into `dist/_chunks/libs/typebox.mjs`.
  */
 export default defineConfig({
-  fmt: { ...oxfmt, ignorePatterns: ["dist"] },
+  fmt: { ...oxfmt, ignorePatterns: ["dist", "docs"] },
   lint: {
     ...oxlint,
     rules: {
@@ -32,7 +32,7 @@ export default defineConfig({
         },
       ],
     },
-    ignorePatterns: ["dist"],
+    ignorePatterns: ["dist", "docs"],
   },
   test: {
     include: ["test/**/*.test.ts"],

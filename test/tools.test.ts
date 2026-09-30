@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { asSchema } from "ai";
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -139,6 +141,13 @@ describe("validateInput", () => {
     expect(checked.ok ? [] : checked.lines).toEqual([
       'Invalid arguments at /word: must match pattern "^[a-z]+$"',
     ]);
+  });
+});
+
+describe("portability", () => {
+  it.each(["index.ts", "pi.ts", "omp.ts", "ai.ts"])("keeps node:* out of src/%s", (file) => {
+    const source = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+    expect(source).not.toMatch(/from "node:/);
   });
 });
 
