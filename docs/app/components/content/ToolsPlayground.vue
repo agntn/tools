@@ -43,6 +43,15 @@ function schedule() {
   }, 250);
 }
 
+/** Arguments from a link in the same layout as a chip's, so the chip lights up; text that isn't JSON stays as sent. */
+function pretty(text: string) {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
 function pick(args: object) {
   source.value = JSON.stringify(args, null, 2);
 }
@@ -52,12 +61,12 @@ onMounted(() => {
   const stop = watch(
     () => route.query.args,
     (value) => {
-      if (typeof value === "string") source.value = value;
+      if (typeof value === "string") source.value = pretty(value);
       stop();
     },
   );
   if (typeof route.query.args === "string") {
-    source.value = route.query.args;
+    source.value = pretty(route.query.args);
     stop();
   }
   watch(source, (value) => {
