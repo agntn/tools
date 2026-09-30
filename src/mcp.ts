@@ -2,14 +2,12 @@
  * MCP adapter: serves {@link ToolDefinition}s from an unconnected MCP server.
  */
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
+  Server,
   type CallToolResult,
   type Tool,
   type ToolAnnotations,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/server";
 
 import {
   indexTools,
@@ -59,9 +57,12 @@ export function errorResult(...lines: readonly string[]): CallToolResult {
 /**
  * Creates an unconnected MCP server exposing the tools.
  *
- * Built on the low-level `Server`, which the SDK marks `@deprecated`, because
- * `McpServer.registerTool` accepts only Standard Schema and TypeBox 1.x does
- * not implement it. This is the one place that keeps that trade-off.
+ * Built on the low-level `Server` of MCP SDK v2, which the SDK marks
+ * `@deprecated`, not on `McpServer`. `McpServer.registerTool` in 2.2.0 would
+ * take the schema, but it answers `toString`, `constructor` and `__proto__` as
+ * "Tool toString disabled" (a lookup that reaches `Object.prototype`), echoes a
+ * raw tool name with newlines and escapes into its error, joins validation
+ * failures into one line and passes a thrown message through unsanitized.
  *
  * `details` never reaches the client and `structuredContent` is never set:
  * clients that see structured output prefer it over `content` and would hide
@@ -78,7 +79,7 @@ export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinit
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({
+  server.setRequestHandler("tools/list", () => ({
     tools: tools.map((tool): Tool => ({
       name: tool.name,
       title: tool.title,
@@ -88,7 +89,7 @@ export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinit
     })),
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  server.setRequestHandler("tools/call", async (request, ctx) => {
     const tool = byName.get(request.params.name);
     if (!tool) {
       return errorResult(`Unknown ${info.name} tool: ${JSON.stringify(request.params.name)}`);
@@ -96,7 +97,7 @@ export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinit
 
     try {
       const result = await invokeTool(tool, request.params.arguments ?? {}, {
-        signal: extra.signal,
+        signal: ctx.mcpReq.signal,
       });
       return {
         content: result.content,
