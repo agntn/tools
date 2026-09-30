@@ -7,7 +7,7 @@ The instruments tools owns:
 | Instrument | Where | Object |
 | --- | --- | --- |
 | [LandingHero.vue](app/components/content/LandingHero.vue) | landing, first screen | hero zone, circuit `register` into the host walk |
-| [LandingHosts.vue](app/components/content/LandingHosts.vue) | under the hero | `text_slug` registered by each adapter in turn, what that host holds, the full registration in the dialog |
+| [LandingHosts.vue](app/components/content/LandingHosts.vue) | under the hero | `text_slug` registered by each adapter in turn: the dialect map, what that host holds, the full registration in the dialog |
 | [LandingDefinition.vue](app/components/content/LandingDefinition.vue) | "One file, zero dialects" | `demo-tool.ts` itself through `?raw`, `execute` folded to its signature |
 | [LandingValidation.vue](app/components/content/LandingValidation.vue) | "Same mistake, same answer, four hosts" | one call per sample: the core's lines, then each host's channel and text |
 | [LandingTrap.vue](app/components/content/LandingTrap.vue) | "The OMP trap, already sprung" | the bare `typebox` import before and after, with the measured start cost |
@@ -22,7 +22,7 @@ Every value an instrument shows comes from the adapters in `../src`, run in [hos
 
 ## Anatomy
 
-- **Host walk.** Bar `Call <adapter>(…, [text_slug])` with the adapter rolling, meta `02 / 04`. Subject: reticle with the host glyph, `Host / <short>`, the host's name, one sentence. Readout: four rows from the registration (title or label, the host's own field in the accent, schema, failure channel), each value on one line with the rest in a tooltip. `03 Full registration` opens the object the host got, functions named. Footer: `One definition, 4 registrations`, previous and next.
+- **Host walk.** A `console-wide` dossier as wide as the hero zone, like the siblings' hero instruments. Bar `Call <adapter>(…, [text_slug])` with the adapter rolling, meta `<peer> · 02 / 04`. The subject band's left column holds the host (reticle, `Host / <short>`, name, one sentence; every host's name block hidden in the same cell, so the band keeps one height) and under it the dialect map: rule `Dialect [ one tool, the field each host puts it in ]`, a column per host, a row per idea (name, label, schema, effect, prompt, run), each cell the field that host's registration really uses or `—`, the current host's column lit. Readout: four rows from the registration, stretched to the map's height while side by side, and a tick per host with the current one open. `03 Full registration` opens the object the host got, functions named. Footer: link to the host page, previous and next.
 - **Validation.** Bar `Call text_slug(<args>)`, meta the sample's label. Rule `Core [ validateInput, then execute ]` with the core's lines in the danger color, or the executor's own `isError` text, or `Nothing wrong with it.`. Rule `Hosts [ channel · what the model reads ]` with one row per host: the channel word, red for a failure, then the text. `03 Full tool response` is the MCP text.
 - **Host dossier.** ID bar with the key and `03 / 04`, meta the peer package. Subject: reticle, `Host / <short>`, name, blurb. Readout from the registration. Band `Access [ import · peer · adapter ]` as leads: the import, the peer with its range from the root `package.json`, how a failure travels. Then `03 Full registration`.
 - **Roster.** Columns host (glyph, name, boxed key), adapter, peer with range, and the failure channel behind a leader.

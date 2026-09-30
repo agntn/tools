@@ -2,7 +2,7 @@ import { validateInput, type ToolDefinition } from "@agntn/tools";
 import { registerOmpTools } from "@agntn/tools/omp";
 import { registerPiTools } from "@agntn/tools/pi";
 
-import rootPackage from "../../../package.json";
+import rootPackage from "../../../package.json" with { type: "json" };
 import { slugTool } from "./demo-tool";
 
 export type HostKey = "mcp" | "pi" | "omp" | "ai";
@@ -218,10 +218,39 @@ export async function callEveryHost(
   >;
 }
 
+/** The same idea, named differently by every host: the rows of the landing's dialect map. */
+export const CONCEPTS = [
+  { key: "name", candidates: ["name"] },
+  { key: "label", candidates: ["title", "label"] },
+  { key: "schema", candidates: ["inputSchema", "parameters"] },
+  { key: "effect", candidates: ["annotations", "approval"] },
+  { key: "prompt", candidates: ["promptSnippet"] },
+  { key: "run", candidates: ["execute"] },
+] as const;
+
+export type Concept = (typeof CONCEPTS)[number]["key"];
+
+/**
+ * The field a registration uses for each concept, read off its own keys, or `null` when it has none.
+ *
+ * @param {object} registration - What the host received.
+ * @returns {Record<Concept, string | null>} Field name per concept.
+ */
+function fieldsOf(registration: object): Record<Concept, string | null> {
+  return Object.fromEntries(
+    CONCEPTS.map((concept) => [
+      concept.key,
+      concept.candidates.find((field) => Object.hasOwn(registration, field)) ?? null,
+    ]),
+  ) as Record<Concept, string | null>;
+}
+
 /** What each host receives when the tool registers, as plain data a page can print. */
 export interface HostView {
   key: HostKey;
   rows: { label: string; value: string; accent?: boolean }[];
+  /** The field this host uses for each concept, from the registration itself. */
+  fields: Record<Concept, string | null>;
   /** The registration the host gets, functions named instead of printed. */
   registration: string;
 }
@@ -277,6 +306,7 @@ export async function hostViews(tool: ToolDefinition = slugTool): Promise<HostVi
         { label: "failure", value: "isError: true, one line per problem" },
       ],
       registration: printRegistration(listed),
+      fields: fieldsOf(listed),
     },
     {
       key: "pi",
@@ -287,6 +317,7 @@ export async function hostViews(tool: ToolDefinition = slugTool): Promise<HostVi
         { label: "failure", value: "thrown, old Pi ignores isError" },
       ],
       registration: printRegistration(pi),
+      fields: fieldsOf(pi),
     },
     {
       key: "omp",
@@ -297,6 +328,7 @@ export async function hostViews(tool: ToolDefinition = slugTool): Promise<HostVi
         { label: "failure", value: "isError returned, bad input thrown" },
       ],
       registration: printRegistration(omp),
+      fields: fieldsOf(omp),
     },
     {
       key: "ai",
@@ -307,6 +339,7 @@ export async function hostViews(tool: ToolDefinition = slugTool): Promise<HostVi
         { label: "failure", value: "thrown, becomes a tool error" },
       ],
       registration: printRegistration({ ...ai, inputSchema: aiSchema }),
+      fields: fieldsOf(ai),
     },
   ];
 }
