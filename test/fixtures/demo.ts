@@ -4,6 +4,23 @@
 
 import { defineTool, Type, type ToolResult } from "../../src/index.ts";
 
+/** Escape sequences, C1, bidi, CRLF, a line separator and a ZWJ emoji, built without raw bytes in this file. */
+const hostileText = [
+  "a",
+  "\u001B[31m",
+  "red",
+  "\u001B[0m",
+  "\u202E",
+  "b",
+  "\u0085",
+  "\r\n",
+  "next",
+  "\u2028",
+  "line",
+  "\t",
+  "\u{1F469}\u200D\u{1F4BB}",
+].join("");
+
 export class DemoError extends Error {}
 
 export const echo = defineTool({
@@ -33,7 +50,7 @@ export const echo = defineTool({
     if (word === "known") throw new DemoError("known\nfailure");
     if (word === "escape") {
       return {
-        content: [{ type: "text", text: "a\u001B[31mred\u001B[0m‮b\nnext" }],
+        content: [{ type: "text", text: hostileText }],
         details: { word, times: 1 },
       };
     }

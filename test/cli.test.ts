@@ -144,8 +144,10 @@ describe("CLI commands", () => {
     await expect(run(["echo", "boom"])).rejects.toThrow("exploded");
   });
 
-  it("strips escape sequences and bidi controls from the text but keeps its lines", async () => {
-    expect((await run(["echo", "escape"])).stdout).toBe("ared b\nnext\n");
+  it("strips escape sequences, C1 and bidi controls from the text but keeps its layout", async () => {
+    expect((await run(["echo", "escape"])).stdout).toBe(
+      `aredb\nnext line\t${String.fromCodePoint(0x1f469, 0x200d, 0x1f4bb)}\n`,
+    );
   });
 
   it("puts the package's commands next to the generated ones and guards them", async () => {
