@@ -124,6 +124,10 @@ function toolFields(tool: ToolDefinition): Field[] {
       throw new ToolDefinitionError(`${tool.name}: cli hint names unknown property ${key}`);
     }
   }
+  const repeated = positional.find((key, index) => positional.indexOf(key) !== index);
+  if (repeated !== undefined) {
+    throw new ToolDefinitionError(`${tool.name}: cli hint lists positional ${repeated} twice`);
+  }
 
   const keys = [
     ...positional,
@@ -342,8 +346,8 @@ function toolInput(
 }
 
 /** C0 and C1 controls but tab and line feed, and the bidi marks, embeddings, overrides and isolates. */
-/* oxlint-disable-next-line no-control-regex */
 const FORGING =
+  /* oxlint-disable-next-line no-control-regex */
   /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u206F]/g;
 
 /**
@@ -394,13 +398,16 @@ function handleError(options: CliOptions, error: unknown): void {
 
 /**
  * @param details - Tool details.
- * @returns {string} Pretty JSON; a bigint becomes its decimal string.
+ * @returns {string} Pretty JSON; a bigint becomes its decimal string, no details `null`.
  */
 function detailsJson(details: unknown): string {
-  return JSON.stringify(
-    details,
-    (_key, value: unknown) => (typeof value === "bigint" ? value.toString() : value),
-    2,
+  // `JSON.stringify` answers `undefined`, not a string, for undefined details.
+  return (
+    (JSON.stringify(
+      details,
+      (_key, value: unknown) => (typeof value === "bigint" ? value.toString() : value),
+      2,
+    ) as string | undefined) ?? "null"
   );
 }
 
@@ -524,22 +531,55 @@ export function createCli(options: CliOptions): CommandDef {
  * Applies `default` and `fallback`. citty's own `default` runs only when no
  * command word is given, and a first word that names no command fails there,
  * so the CLI rewrites the words before citty sees them. A leading option such
- * as `--help` goes to the main command untouched.
+ * as `--help` goes to the main command untouched. Only on the fallback path
+ * are the package's commands loaded, for their aliases.
  *
  * @param options - CLI options.
  * @param argv - Words after the executable and script.
  * @returns {string[]} Words for citty.
  */
-export function normalizeArgv(options: CliOptions, argv: readonly string[]): string[] {
+export async function normalizeArgv(
+  options: CliOptions,
+  argv: readonly string[],
+): Promise<string[]> {
   const [first] = argv;
   if (first === undefined) return options.default === undefined ? [] : [options.default];
-  if (options.fallback === undefined || first.startsWith("-")) return [...argv];
+  // A lone `-` is the stdin word of the fallback's positional, not an option.
+  const option = first.startsWith("-") && first !== "-";
+  if (options.fallback === undefined || option || (await namesCommand(options, first))) {
+    return [...argv];
+  }
+  return [options.fallback, ...argv];
+}
+
+/**
+ * @param options - CLI options.
+ * @param word - First word of the command line.
+ * @returns {Promise<boolean>} Whether a command or alias has this name.
+ */
+async function namesCommand(options: CliOptions, word: string): Promise<boolean> {
+  const commands = Object.values(options.commands ?? {});
   const names = new Set([
     ...options.tools.flatMap((tool) => [commandName(tool), ...(tool.cli?.aliases ?? [])]),
     ...(options.mcp === true ? ["mcp"] : []),
     ...Object.keys(options.commands ?? {}),
   ]);
-  return names.has(first) ? [...argv] : [options.fallback, ...argv];
+  if (names.has(word)) return true;
+  return (await Promise.all(commands.map(commandAliases))).flat().includes(word);
+}
+
+/**
+ * Loads a package command to read its aliases, as citty itself does for a
+ * word that names no command.
+ *
+ * @param command - The package's command, as citty takes it.
+ * @returns {Promise<string[]>} Its `meta.alias` entries.
+ */
+async function commandAliases(command: SubCommandsDef[string]): Promise<string[]> {
+  const resolved = await (typeof command === "function" ? command() : command);
+  const meta = await (typeof resolved.meta === "function" ? resolved.meta() : resolved.meta);
+  const alias = meta?.alias ?? [];
+  return typeof alias === "string" ? [alias] : [...alias];
 }
 
 /**
@@ -577,5 +617,5 @@ export async function runCli(
   stderr.on("error", exitOnClosedPipe);
   const main = createCli(options);
   const { runMain } = await import("citty");
-  await runMain(main, { rawArgs: normalizeArgv(options, argv) });
+  await runMain(main, { rawArgs: await normalizeArgv(options, argv) });
 }

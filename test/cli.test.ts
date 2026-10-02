@@ -45,7 +45,7 @@ async function run(argv: readonly string[], cli: CliOptions = options) {
     stderr += String(chunk);
     return true;
   });
-  await runCommand(createCli(cli), { rawArgs: normalizeArgv(cli, argv) });
+  await runCommand(createCli(cli), { rawArgs: await normalizeArgv(cli, argv) });
   const exitCode = process.exitCode;
   process.exitCode = undefined;
   return { stdout, stderr, exitCode };
@@ -79,6 +79,14 @@ describe("CLI commands", () => {
     });
   });
 
+  it("prints null for undefined details with --json", async () => {
+    const bare = defineTool({ ...echo, execute: () => ({ content: [], details: undefined }) });
+    expect(
+      (await run(["echo", "hi", "--json"], { ...options, tools: [bare], default: undefined }))
+        .stdout,
+    ).toBe("null\n");
+  });
+
   it("prints details with --json", async () => {
     expect((await run(["echo", "hi", "--times", "2", "--json"])).stdout).toBe(
       `${JSON.stringify({ word: "hi", times: 2 }, null, 2)}\n`,
@@ -87,8 +95,9 @@ describe("CLI commands", () => {
 
   it("applies the fallback, the default and the aliases", async () => {
     expect((await run(["hi"])).stdout).toBe("hi\n");
-    expect(normalizeArgv(options, [])).toEqual(["measure"]);
-    expect(normalizeArgv(options, ["--help"])).toEqual(["--help"]);
+    expect(await normalizeArgv(options, [])).toEqual(["measure"]);
+    expect(await normalizeArgv(options, ["--help"])).toEqual(["--help"]);
+    expect(await normalizeArgv(options, ["-"])).toEqual(["echo", "-"]);
     expect((await run(["len", "abc"])).stdout).toBe("3\n");
   });
 
@@ -155,15 +164,18 @@ describe("CLI commands", () => {
       ...options,
       commands: {
         echo: { meta: { name: "echo" }, run: () => process.stdout.write("own echo\n") },
-        info: {
+        info: () => ({
+          meta: { name: "info", alias: "i" },
           run() {
             throw new DemoError("no info");
           },
-        },
+        }),
       },
     };
     expect((await run(["echo", "hi"], cli)).stdout).toBe("own echo\n");
     expect(await run(["info"], cli)).toEqual({ stdout: "", stderr: "no info\n", exitCode: 1 });
+    // A lazy command's alias is not a word for the fallback.
+    expect((await run(["i"], cli)).stderr).toBe("no info\n");
   });
 });
 
@@ -187,6 +199,9 @@ describe("CLI definitions", () => {
   it("rejects hints the schema cannot take", async () => {
     await expect(build(tool({ positional: ["nope"] }))).rejects.toThrow(ToolDefinitionError);
     await expect(build(tool({ positional: ["flag"] }))).rejects.toThrow(/cannot be positional/);
+    await expect(build(tool({ positional: ["text", "text"] }))).rejects.toThrow(
+      /lists positional text twice/,
+    );
     await expect(build(tool({ stdin: ["text"] }))).rejects.toThrow(/must be a string/);
     await expect(build(tool({}, true))).rejects.toThrow(/reserved flag --json/);
   });
