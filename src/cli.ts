@@ -49,6 +49,9 @@ export interface CliOptions {
   readonly expected?: (error: unknown) => boolean;
 }
 
+/** A flag `--<flag>` can spell: not empty, no `=`, no space or control, not starting with `-`. */
+const FLAG_WORD = /^[a-z0-9][a-z0-9.-]*$/;
+
 /** Flags every tool command answers itself. */
 const RESERVED_FLAGS = new Set(["help", "version", "json"]);
 
@@ -167,25 +170,64 @@ function toolFields(tool: ToolDefinition): Field[] {
       positional: positional.includes(key),
       stdin: stdin.includes(key),
     };
-    if (RESERVED_FLAGS.has(field.flag)) {
-      throw new ToolDefinitionError(
-        `${tool.name}: property ${key} takes the reserved flag --${field.flag}`,
-      );
-    }
-    if (flags.has(field.flag)) {
-      throw new ToolDefinitionError(`${tool.name}: two properties take the flag --${field.flag}`);
-    }
-    if (field.positional && field.kind === "boolean") {
-      throw new ToolDefinitionError(`${tool.name}: boolean property ${key} cannot be positional`);
-    }
-    if (field.stdin && field.kind !== "string") {
-      throw new ToolDefinitionError(`${tool.name}: stdin property ${key} must be a string`);
-    }
+    assertField(tool, field, flags.has(field.flag));
     flags.add(field.flag);
     return field;
   });
   assertOneOptionPerSpelling(tool, fields);
+  assertRequiredPositionalsFirst(tool, fields);
   return fields;
+}
+
+/**
+ * @param tool - Tool the field belongs to.
+ * @param field - Field to check.
+ * @param taken - Whether a field before it has the same flag.
+ * @throws {ToolDefinitionError} When no word can spell the flag, it is reserved or taken, or a hint does not fit the field.
+ */
+function assertField(tool: ToolDefinition, field: Field, taken: boolean): void {
+  if (!FLAG_WORD.test(field.flag)) {
+    throw new ToolDefinitionError(
+      `${tool.name}: property ${JSON.stringify(field.key)} gives the flag ${JSON.stringify(field.flag)}, which must match ${FLAG_WORD}`,
+    );
+  }
+  if (RESERVED_FLAGS.has(field.flag)) {
+    throw new ToolDefinitionError(
+      `${tool.name}: property ${field.key} takes the reserved flag --${field.flag}`,
+    );
+  }
+  if (taken) {
+    throw new ToolDefinitionError(`${tool.name}: two properties take the flag --${field.flag}`);
+  }
+  if (field.positional && field.kind === "boolean") {
+    throw new ToolDefinitionError(
+      `${tool.name}: boolean property ${field.key} cannot be positional`,
+    );
+  }
+  if (field.stdin && field.kind !== "string") {
+    throw new ToolDefinitionError(`${tool.name}: stdin property ${field.key} must be a string`);
+  }
+}
+
+/**
+ * Words fill the positionals in order, so an optional one before a required
+ * one would take the only word given and leave the required one empty.
+ *
+ * @param tool - Tool the fields belong to.
+ * @param fields - The tool's fields.
+ * @throws {ToolDefinitionError} When an optional positional comes before a required one.
+ */
+function assertRequiredPositionalsFirst(tool: ToolDefinition, fields: readonly Field[]): void {
+  const positional = fields.filter((field) => field.positional);
+  const optional = positional.findIndex((field) => !field.required);
+  const late = positional
+    .slice(optional === -1 ? positional.length : optional)
+    .find((field) => field.required);
+  if (late !== undefined) {
+    throw new ToolDefinitionError(
+      `${tool.name}: required positional ${late.key} comes after an optional one`,
+    );
+  }
 }
 
 /**
@@ -721,9 +763,9 @@ async function dispatch(
   if (argv.length === 1 && (first === "--version" || first === "-v")) {
     writeLine("stdout", options.version);
   } else if (first === "--help" || first === "-h") {
-    writeLine("stdout", mainUsage(options, commands));
+    writeLine("stdout", sanitizeText(mainUsage(options, commands)));
   } else if (first === undefined) {
-    writeLine("stderr", mainUsage(options, commands));
+    writeLine("stderr", sanitizeText(mainUsage(options, commands)));
     fail(["No command specified"]);
   } else {
     const command = commands.find((each) => each.name === first || each.aliases.includes(first));
@@ -750,7 +792,7 @@ async function runCommand(
 ): Promise<void> {
   const words = parseWords(rawArgs, command.fields);
   if (words.help) {
-    writeLine("stdout", commandUsage(options, command));
+    writeLine("stdout", sanitizeText(commandUsage(options, command)));
     return;
   }
   try {

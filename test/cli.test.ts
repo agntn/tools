@@ -336,6 +336,51 @@ describe("CLI definitions", () => {
     ).toThrow("demo_clash: properties cache and noCache both answer to --no-cache");
   });
 
+  it("rejects a flag no word can spell and an optional positional before a required one", () => {
+    const make = (
+      properties: Readonly<Record<string, boolean>>,
+      positional: readonly string[] = [],
+    ) =>
+      defineTool({
+        name: "demo_shape",
+        title: "Shape",
+        description: "x",
+        effect: "read",
+        input: Type.Object(
+          Object.fromEntries(
+            Object.entries(properties).map(([key, required]) => [
+              key,
+              required ? Type.String() : Type.Optional(Type.String()),
+            ]),
+          ),
+          { additionalProperties: false },
+        ),
+        cli: { positional },
+        execute: () => ({ content: [], details: null }),
+      });
+    const build = (tool: ReturnType<typeof make>) => () =>
+      createCli({ ...options, tools: [tool], default: undefined, fallback: undefined });
+    for (const key of ["", "a=b", "-x", "a b"]) {
+      expect(build(make({ [key]: true }))).toThrow(/must match/);
+    }
+    expect(build(make({ first: false, second: true }, ["first", "second"]))).toThrow(
+      "demo_shape: required positional second comes after an optional one",
+    );
+    expect(build(make({ first: false, second: true }, ["second", "first"]))).not.toThrow();
+  });
+
+  it("sanitizes the usage text", async () => {
+    const loud = defineTool({
+      ...echo,
+      description: `Echo${String.fromCodePoint(0x1b)}[31m red${String.fromCodePoint(0x202e)}x.`,
+    });
+    const { stdout } = await run(["--help"], { ...options, tools: [loud], default: undefined });
+    expect(stdout).toContain("Echo redx.");
+    expect([0x1b, 0x202e].some((point) => stdout.includes(String.fromCodePoint(point)))).toBe(
+      false,
+    );
+  });
+
   it("rejects a derived command name that cannot be dispatched", () => {
     for (const name of ["demo__h", "demo_"]) {
       expect(() => commandName({ ...echo, name })).toThrow(/must match/);
