@@ -512,14 +512,27 @@ function handleError(options: CliOptions, error: unknown): void {
  */
 function detailsJson(details: unknown): string {
   // `JSON.stringify` answers `undefined`, not a string, for undefined details.
-  return (
+  const json =
     (JSON.stringify(
       details,
       (_key, value: unknown) => (typeof value === "bigint" ? value.toString() : value),
       2,
-    ) as string | undefined) ?? "null"
+    ) as string | undefined) ?? "null";
+  return json.replaceAll(
+    JSON_FORGING,
+    (character) => `\\u${(character.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`,
   );
 }
+
+/**
+ * What `JSON.stringify` leaves literal although a terminal acts on it: DEL and
+ * C1, the bidi marks, overrides and isolates, and the Unicode line and
+ * paragraph separators. They only occur inside strings, so a `\u` escape
+ * keeps the parsed details the same.
+ */
+const JSON_FORGING =
+  /* oxlint-disable-next-line no-control-regex */
+  /[\u007F-\u009F\u061C\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u206F]/g;
 
 /**
  * @param options - CLI options.
@@ -616,6 +629,21 @@ function generatedTools(options: CliOptions): ToolDefinition[] {
 }
 
 /**
+ * @param options - CLI options.
+ * @param generated - Tools that keep a generated command.
+ * @throws {ToolDefinitionError} When two generated commands, aliases or `mcp` share a name.
+ */
+function assertUniqueNames(options: CliOptions, generated: readonly ToolDefinition[]): void {
+  const mcp = options.mcp === true && !Object.hasOwn(options.commands ?? {}, "mcp");
+  const names = [
+    ...generated.flatMap((tool) => [commandName(tool), ...(tool.cli?.aliases ?? [])]),
+    ...(mcp ? ["mcp"] : []),
+  ];
+  const repeated = names.find((name, index) => names.indexOf(name) !== index);
+  if (repeated !== undefined) throw new ToolDefinitionError(`Two commands are named ${repeated}`);
+}
+
+/**
  * Builds the main command without loading citty.
  *
  * @param options - CLI options.
@@ -625,16 +653,11 @@ function generatedTools(options: CliOptions): ToolDefinition[] {
 export function createCli(options: CliOptions): CommandDef {
   indexTools(options.tools);
   const generated = generatedTools(options);
-  const names = [
-    ...generated.flatMap((tool) => [commandName(tool), ...(tool.cli?.aliases ?? [])]),
-    ...(options.mcp === true && !Object.hasOwn(options.commands ?? {}, "mcp") ? ["mcp"] : []),
-  ];
-  const repeated = names.find((name, index) => names.indexOf(name) !== index);
-  if (repeated !== undefined) throw new ToolDefinitionError(`Two commands are named ${repeated}`);
+  assertUniqueNames(options, generated);
 
-  const subCommands: SubCommandsDef = Object.fromEntries(
-    generated.map((tool) => [commandName(tool), () => toolCommand(options, tool)]),
-  );
+  // Null prototype: a package command named `__proto__` stays an own key.
+  const subCommands: SubCommandsDef = emptyRecord();
+  for (const tool of generated) subCommands[commandName(tool)] = () => toolCommand(options, tool);
   if (options.mcp === true) subCommands["mcp"] = () => mcpCommand(options);
   for (const [name, command] of Object.entries(options.commands ?? {})) {
     subCommands[name] = () => guardCommand(options, command);
@@ -722,9 +745,11 @@ function exitOnClosedPipe(error: Readonly<NodeJS.ErrnoException>): void {
  * Runs the CLI on `process.argv`.
  *
  * citty colors its usage and errors even into a pipe and decides once, as it
- * loads, so colors are settled here first: only when both streams it writes to
- * are terminals that take them. `hasColors()` already honors `NO_COLOR` and
- * `TERM=dumb`.
+ * loads, so colors are settled here: only when both streams it writes to are
+ * terminals that take them. `hasColors()` already honors `NO_COLOR` and
+ * `TERM=dumb`. Setting `NO_COLOR` covers a citty that loads after this point;
+ * one the package imported earlier has decided already, so without colors the
+ * usage and citty's error lines lose their escape sequences on the way out.
  *
  * @param options - CLI options.
  * @param argv - Words after the executable and script.
@@ -734,12 +759,25 @@ export async function runCli(
   argv: readonly string[] = process.argv.slice(2),
 ): Promise<void> {
   const { stderr, stdout } = process;
-  if (!(stdout.isTTY && stdout.hasColors() && stderr.isTTY && stderr.hasColors())) {
-    process.env["NO_COLOR"] = "1";
-  }
+  const colors = stdout.isTTY && stdout.hasColors() && stderr.isTTY && stderr.hasColors();
+  if (!colors) process.env["NO_COLOR"] = "1";
   stdout.on("error", exitOnClosedPipe);
   stderr.on("error", exitOnClosedPipe);
   const main = createCli(options);
-  const { runMain } = await import("citty");
-  await runMain(main, { rawArgs: await normalizeArgv(options, argv) });
+  const { renderUsage, runMain } = await import("citty");
+  if (!colors) {
+    const { error } = console;
+    console.error = (...parts: readonly unknown[]) => {
+      error(
+        ...parts.map((part) => (typeof part === "string" ? stripVTControlCharacters(part) : part)),
+      );
+    };
+  }
+  await runMain(main, {
+    rawArgs: await normalizeArgv(options, argv),
+    async showUsage(command, parent) {
+      const usage = await renderUsage(command, parent);
+      console.log(`${colors ? usage : stripVTControlCharacters(usage)}\n`);
+    },
+  });
 }

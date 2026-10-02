@@ -21,6 +21,7 @@ const options: CliOptions = {
 };
 
 const fixture = fileURLToPath(new URL("fixtures/demo-cli.ts", import.meta.url));
+const eagerFixture = fileURLToPath(new URL("fixtures/eager-cli.ts", import.meta.url));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -85,6 +86,20 @@ describe("CLI commands", () => {
       (await run(["echo", "hi", "--json"], { ...options, tools: [bare], default: undefined }))
         .stdout,
     ).toBe("null\n");
+  });
+
+  it("escapes what a terminal acts on in --json and keeps the details", async () => {
+    const hostile = [0x85, 0x202e, 0x2028, 0x2066].map((point) => String.fromCodePoint(point));
+    const details = { text: `a${hostile.join("b")}c` };
+    const loud = defineTool({ ...echo, execute: () => ({ content: [], details }) });
+    const { stdout } = await run(["echo", "hi", "--json"], {
+      ...options,
+      tools: [loud],
+      default: undefined,
+    });
+    expect(hostile.some((character) => stdout.includes(character))).toBe(false);
+    expect(stdout).toContain(String.raw`\u0085`);
+    expect(JSON.parse(stdout)).toEqual(details);
   });
 
   it("prints details with --json", async () => {
@@ -305,6 +320,16 @@ describe("CLI definitions", () => {
     );
   });
 
+  it("keeps a package command named __proto__", async () => {
+    const commands: NonNullable<CliOptions["commands"]> = Object.create(null) as never;
+    Object.defineProperty(commands, "__proto__", {
+      value: { run: () => process.stdout.write("proto\n") },
+      enumerable: true,
+    });
+    const cli: CliOptions = { ...options, commands, default: "__proto__", fallback: undefined };
+    expect((await run([], cli)).stdout).toBe("proto\n");
+  });
+
   it("rejects two commands of one name and a default that names none", () => {
     expect(() => createCli({ ...options, tools: [echo, tool({ command: "echo" })] })).toThrow(
       /Two commands are named echo/,
@@ -342,6 +367,19 @@ describe("CLI process", () => {
     expect(bad.status).toBe(1);
     expect(bad.stderr).toBe("Invalid arguments at /mode: must be one of plain, loud\n");
     expect(bad.stderr).not.toContain("\u001B[");
+  });
+
+  it("strips colors from usage and errors when the package loaded citty first", () => {
+    const env: NodeJS.ProcessEnv = { ...process.env, TERM: "xterm-256color" };
+    for (const key of ["CI", "TEST", "NO_COLOR", "VITEST"]) delete env[key];
+    for (const argv of [["--help"], ["nope"]]) {
+      const answer = spawnSync(process.execPath, [eagerFixture, ...argv], {
+        env,
+        encoding: "utf8",
+      });
+      expect(`${answer.stdout}${answer.stderr}`).toMatch(/Unknown command nope|USAGE/);
+      expect(`${answer.stdout}${answer.stderr}`).not.toContain(String.fromCodePoint(0x1b));
+    }
   });
 
   it("serves the same tools over MCP with the mcp command", async () => {
