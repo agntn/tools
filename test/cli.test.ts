@@ -174,6 +174,29 @@ describe("CLI commands", () => {
     }
   });
 
+  it("reads prototype names as plain properties", async () => {
+    const proto = defineTool({
+      name: "demo_proto",
+      title: "Proto",
+      description: "x",
+      effect: "read",
+      input: Type.Object(
+        { toString: Type.Optional(Type.String()), constructor: Type.Optional(Type.String()) },
+        { additionalProperties: false },
+      ),
+      execute: (input) => ({
+        content: [{ type: "text", text: JSON.stringify(input) }],
+        details: null,
+      }),
+    });
+    const cli: CliOptions = { ...options, tools: [proto], default: undefined, fallback: undefined };
+    expect(await run(["proto", "--constructor", "x"], cli)).toEqual({
+      stdout: '{"constructor":"x"}\n',
+      stderr: "",
+      exitCode: undefined,
+    });
+  });
+
   it("lets stdin feed one argument only", async () => {
     const pair = defineTool({
       name: "demo_pair",
@@ -287,6 +310,11 @@ describe("CLI definitions", () => {
       /Two commands are named echo/,
     );
     expect(() => createCli({ ...options, default: "nope" })).toThrow(/no command nope/);
+    // `measure` is replaced, so its alias `len` is free for a tool command.
+    const len = tool({ command: "len" });
+    expect(() =>
+      createCli({ ...options, tools: [...demoTools, len], commands: { measure: { run() {} } } }),
+    ).not.toThrow();
   });
 });
 

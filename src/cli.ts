@@ -219,6 +219,16 @@ function valueHint(field: Field): string {
   return field.kind === "string" ? field.flag : field.kind;
 }
 
+/**
+ * A record without a prototype: a property named `toString` reads as unset
+ * instead of `Object.prototype.toString`, and `__proto__` is a plain key.
+ *
+ * @returns {Record<string, T>} An empty record.
+ */
+function emptyRecord<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
 interface ParsedWords {
   /** Raw values by property: a string, or `true`/`false` for a boolean. */
   readonly values: Readonly<Record<string, string | boolean>>;
@@ -257,7 +267,7 @@ function parseWords(rawArgs: readonly string[], fields: readonly Field[]): Parse
     tokens: true,
   });
 
-  const values: Record<string, string | boolean> = {};
+  const values = emptyRecord<string | boolean>();
   const errors: string[] = [];
   const positionals: string[] = [];
   let json = false;
@@ -270,7 +280,7 @@ function parseWords(rawArgs: readonly string[], fields: readonly Field[]): Parse
     else values[read.key] = read.value;
   }
   return {
-    values: { ...values, ...positionalValues(fields, positionals) },
+    values: Object.assign(values, positionalValues(fields, positionals)),
     json,
     errors: [...new Set(errors.length > 0 ? errors : extraPositionals(fields, positionals))],
   };
@@ -286,11 +296,14 @@ function positionalValues(
   positionals: readonly string[],
 ): Record<string, string> {
   const takes = fields.filter((field) => field.positional);
-  return Object.fromEntries(
-    takes.flatMap((field, index) => {
-      const value = positionals[index];
-      return value === undefined ? [] : [[field.key, value]];
-    }),
+  return Object.assign(
+    emptyRecord<string>(),
+    Object.fromEntries(
+      takes.flatMap((field, index) => {
+        const value = positionals[index];
+        return value === undefined ? [] : [[field.key, value]];
+      }),
+    ),
   );
 }
 
@@ -423,7 +436,7 @@ function toolInput(
   fields: readonly Field[],
   values: Readonly<Record<string, string | boolean>>,
 ): unknown {
-  const input: Record<string, unknown> = {};
+  const input = emptyRecord<unknown>();
   const fromStdin = fields.filter((field) => field.stdin && values[field.key] === "-");
   if (fromStdin.length > 1) {
     throw new ToolInputError([
@@ -593,6 +606,16 @@ function mcpCommand(options: CliOptions): CommandDef {
 }
 
 /**
+ * A package command replaces the generated one of its name, and the aliases go with it.
+ *
+ * @param options - CLI options.
+ * @returns {ToolDefinition[]} The tools that keep a generated command.
+ */
+function generatedTools(options: CliOptions): ToolDefinition[] {
+  return options.tools.filter((tool) => !Object.hasOwn(options.commands ?? {}, commandName(tool)));
+}
+
+/**
  * Builds the main command without loading citty.
  *
  * @param options - CLI options.
@@ -601,12 +624,16 @@ function mcpCommand(options: CliOptions): CommandDef {
  */
 export function createCli(options: CliOptions): CommandDef {
   indexTools(options.tools);
-  const names = options.tools.flatMap((tool) => [commandName(tool), ...(tool.cli?.aliases ?? [])]);
+  const generated = generatedTools(options);
+  const names = [
+    ...generated.flatMap((tool) => [commandName(tool), ...(tool.cli?.aliases ?? [])]),
+    ...(options.mcp === true && !Object.hasOwn(options.commands ?? {}, "mcp") ? ["mcp"] : []),
+  ];
   const repeated = names.find((name, index) => names.indexOf(name) !== index);
   if (repeated !== undefined) throw new ToolDefinitionError(`Two commands are named ${repeated}`);
 
   const subCommands: SubCommandsDef = Object.fromEntries(
-    options.tools.map((tool) => [commandName(tool), () => toolCommand(options, tool)]),
+    generated.map((tool) => [commandName(tool), () => toolCommand(options, tool)]),
   );
   if (options.mcp === true) subCommands["mcp"] = () => mcpCommand(options);
   for (const [name, command] of Object.entries(options.commands ?? {})) {
@@ -656,12 +683,8 @@ export async function normalizeArgv(
  */
 async function namesCommand(options: CliOptions, word: string): Promise<boolean> {
   const commands = Object.values(options.commands ?? {});
-  // A package command replaces the generated one, and its aliases go with it.
-  const generated = options.tools.filter(
-    (tool) => !Object.hasOwn(options.commands ?? {}, commandName(tool)),
-  );
   const names = new Set([
-    ...generated.flatMap((tool) => [commandName(tool), ...(tool.cli?.aliases ?? [])]),
+    ...generatedTools(options).flatMap((tool) => [commandName(tool), ...(tool.cli?.aliases ?? [])]),
     ...(options.mcp === true ? ["mcp"] : []),
     ...Object.keys(options.commands ?? {}),
   ]);
