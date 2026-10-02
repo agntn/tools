@@ -1,6 +1,4 @@
-// citty loads here, before runCli can set NO_COLOR, as in a package whose own commands import it.
-import "citty";
-
+// The demo tools without `default` or `fallback`, so every first word is a command word.
 import { runCli } from "../../src/cli.ts";
 import { demoTools } from "./demo.ts";
 

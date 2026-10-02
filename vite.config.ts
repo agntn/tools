@@ -25,6 +25,7 @@ export default defineConfig({
                 "ToolResult",
                 "OmpToolOptions",
                 "CliOptions",
+                "Command",
               ],
             },
             {
@@ -33,12 +34,6 @@ export default defineConfig({
               package: "@oh-my-pi/pi-coding-agent",
             },
             { from: "package", name: "ExtensionAPI", package: "@earendil-works/pi-coding-agent" },
-            /* citty's command types are mutable records; the adapter only reads them. */
-            {
-              from: "package",
-              name: ["CommandContext", "CommandDef", "Resolvable", "SubCommandsDef"],
-              package: "citty",
-            },
           ],
           ignoreInferredTypes: true,
         },

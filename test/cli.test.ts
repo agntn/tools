@@ -3,10 +3,9 @@ import { fileURLToPath } from "node:url";
 
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { runCommand } from "citty";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { commandName, createCli, normalizeArgv, toolCommand, type CliOptions } from "../src/cli.ts";
+import { commandName, createCli, normalizeArgv, type CliOptions } from "../src/cli.ts";
 import { defineTool, ToolDefinitionError, Type } from "../src/index.ts";
 import { demoTools, DemoError, echo } from "./fixtures/demo.ts";
 
@@ -21,7 +20,7 @@ const options: CliOptions = {
 };
 
 const fixture = fileURLToPath(new URL("fixtures/demo-cli.ts", import.meta.url));
-const eagerFixture = fileURLToPath(new URL("fixtures/eager-cli.ts", import.meta.url));
+const plainFixture = fileURLToPath(new URL("fixtures/plain-cli.ts", import.meta.url));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -29,7 +28,7 @@ afterEach(() => {
 });
 
 /**
- * Runs the CLI in process, as citty would after `normalizeArgv`.
+ * Runs the CLI in process.
  *
  * @param argv - Words after the executable.
  * @param cli - CLI options.
@@ -46,7 +45,7 @@ async function run(argv: readonly string[], cli: CliOptions = options) {
     stderr += String(chunk);
     return true;
   });
-  await runCommand(createCli(cli), { rawArgs: await normalizeArgv(cli, argv) });
+  await createCli(cli).run(argv);
   const exitCode = process.exitCode;
   process.exitCode = undefined;
   return { stdout, stderr, exitCode };
@@ -110,9 +109,9 @@ describe("CLI commands", () => {
 
   it("applies the fallback, the default and the aliases", async () => {
     expect((await run(["hi"])).stdout).toBe("hi\n");
-    expect(await normalizeArgv(options, [])).toEqual(["measure"]);
-    expect(await normalizeArgv(options, ["--help"])).toEqual(["--help"]);
-    expect(await normalizeArgv(options, ["-"])).toEqual(["echo", "-"]);
+    expect(normalizeArgv(options, [])).toEqual(["measure"]);
+    expect(normalizeArgv(options, ["--help"])).toEqual(["--help"]);
+    expect(normalizeArgv(options, ["-"])).toEqual(["echo", "-"]);
     expect((await run(["len", "abc"])).stdout).toBe("3\n");
   });
 
@@ -254,25 +253,36 @@ describe("CLI commands", () => {
   });
 
   it("puts the package's commands next to the generated ones and guards them", async () => {
-    const cli: CliOptions = {
-      ...options,
-      commands: {
-        echo: { meta: { name: "echo" }, run: () => process.stdout.write("own echo\n") },
-        info: () => ({
-          meta: { name: "info", alias: "i" },
-          run() {
-            throw new DemoError("no info");
-          },
-        }),
+    const ownEcho = defineTool({
+      name: "demo_own_echo",
+      title: "Own echo",
+      description: "Echo it my way.",
+      effect: "read",
+      input: Type.Object({ word: Type.String() }, { additionalProperties: false }),
+      cli: { command: "echo", positional: ["word"] },
+      execute: ({ word }) => ({ content: [{ type: "text", text: `own ${word}` }], details: null }),
+    });
+    const info = defineTool({
+      name: "demo_info",
+      title: "Info",
+      description: "Tell about it.",
+      effect: "read",
+      input: Type.Object({}),
+      cli: { aliases: ["i"] },
+      execute() {
+        throw new DemoError("no info");
       },
-    };
-    expect((await run(["echo", "hi"], cli)).stdout).toBe("own echo\n");
+    });
+    const cli: CliOptions = { ...options, commands: [ownEcho, info] };
+    expect((await run(["echo", "hi"], cli)).stdout).toBe("own hi\n");
     expect(await run(["info"], cli)).toEqual({ stdout: "", stderr: "no info\n", exitCode: 1 });
-    // A lazy command's alias is not a word for the fallback.
     expect((await run(["i"], cli)).stderr).toBe("no info\n");
     // The alias of a replaced tool command goes with it, to the fallback.
-    const replaced: CliOptions = { ...options, commands: { measure: { run: () => {} } } };
-    expect(await normalizeArgv(replaced, ["len"])).toEqual(["echo", "len"]);
+    const replaced: CliOptions = {
+      ...options,
+      commands: [{ ...info, cli: { command: "measure" } }],
+    };
+    expect(normalizeArgv(replaced, ["len"])).toEqual(["echo", "len"]);
   });
 });
 
@@ -309,7 +319,7 @@ describe("CLI definitions", () => {
     }
   });
 
-  it("rejects two options citty reads under one spelling", () => {
+  it("rejects two options read under one spelling", () => {
     const clash = defineTool({
       name: "demo_clash",
       title: "Clash",
@@ -321,19 +331,9 @@ describe("CLI definitions", () => {
       ),
       execute: () => ({ content: [], details: null }),
     });
-    expect(() => toolCommand(options, clash)).toThrow(
-      "demo_clash: properties cache and noCache both answer to --no-cache",
-    );
-  });
-
-  it("keeps a package command named __proto__", async () => {
-    const commands: NonNullable<CliOptions["commands"]> = Object.create(null) as never;
-    Object.defineProperty(commands, "__proto__", {
-      value: { run: () => process.stdout.write("proto\n") },
-      enumerable: true,
-    });
-    const cli: CliOptions = { ...options, commands, default: "__proto__", fallback: undefined };
-    expect((await run([], cli)).stdout).toBe("proto\n");
+    expect(() =>
+      createCli({ ...options, tools: [clash], default: undefined, fallback: undefined }),
+    ).toThrow("demo_clash: properties cache and noCache both answer to --no-cache");
   });
 
   it("rejects a derived command name that cannot be dispatched", () => {
@@ -350,7 +350,11 @@ describe("CLI definitions", () => {
     // `measure` is replaced, so its alias `len` is free for a tool command.
     const len = tool({ command: "len" });
     expect(() =>
-      createCli({ ...options, tools: [...demoTools, len], commands: { measure: { run() {} } } }),
+      createCli({
+        ...options,
+        tools: [...demoTools, len],
+        commands: [{ ...echo, name: "demo_own_measure", cli: { command: "measure" } }],
+      }),
     ).not.toThrow();
   });
 });
@@ -381,38 +385,36 @@ describe("CLI process", () => {
     expect(bad.stderr).not.toContain("\u001B[");
   });
 
-  it("strips colors from usage and errors when the package loaded citty first", () => {
-    const env: NodeJS.ProcessEnv = { ...process.env, TERM: "xterm-256color" };
-    for (const key of ["CI", "TEST", "NO_COLOR", "VITEST"]) delete env[key];
-    for (const argv of [["--help"], ["nope"]]) {
-      const answer = spawnSync(process.execPath, [eagerFixture, ...argv], {
+  it("writes no escape sequences in usage or errors", () => {
+    const env: NodeJS.ProcessEnv = { ...process.env, TERM: "xterm-256color", FORCE_COLOR: "1" };
+    for (const argv of [["--help"], ["echo", "--help"], ["nope"], []]) {
+      const answer = spawnSync(process.execPath, [plainFixture, ...argv], {
         env,
         encoding: "utf8",
       });
-      expect(`${answer.stdout}${answer.stderr}`).toMatch(/Unknown command nope|USAGE/);
       expect(`${answer.stdout}${answer.stderr}`).not.toContain(String.fromCodePoint(0x1b));
     }
   });
 
   it("keeps a forged command word on one line", () => {
     const word = `bad${String.fromCodePoint(10)}forged${String.fromCodePoint(0x202e)}x`;
-    const answer = spawnSync(process.execPath, [eagerFixture, word], { encoding: "utf8" });
+    const answer = spawnSync(process.execPath, [plainFixture, word], { encoding: "utf8" });
     expect(answer.status).toBe(1);
     expect(answer.stderr).toBe(
-      `Unknown command ${JSON.stringify(word).replace(String.fromCodePoint(0x202e), " ")}\n`,
+      `Unknown command ${JSON.stringify(word).replace(String.fromCodePoint(0x202e), " ")}\nRun demo --help for the commands\n`,
     );
   });
 
   it("leaves --help after -- to the tool and still answers --help and --version", () => {
-    const literal = spawnSync(process.execPath, [eagerFixture, "measure", "--", "--help"], {
+    const literal = spawnSync(process.execPath, [plainFixture, "measure", "--", "--help"], {
       encoding: "utf8",
     });
     expect([literal.stdout, literal.status]).toEqual(["6\n", 0]);
-    const help = spawnSync(process.execPath, [eagerFixture, "echo", "hi", "--help"], {
+    const help = spawnSync(process.execPath, [plainFixture, "echo", "hi", "--help"], {
       encoding: "utf8",
     });
     expect([help.stdout.includes("USAGE demo echo"), help.status]).toEqual([true, 0]);
-    const version = spawnSync(process.execPath, [eagerFixture, "--version"], { encoding: "utf8" });
+    const version = spawnSync(process.execPath, [plainFixture, "--version"], { encoding: "utf8" });
     expect(version.stdout).toBe("1.2.3\n");
   });
 
