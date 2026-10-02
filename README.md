@@ -22,7 +22,7 @@ MCP wants an `inputSchema`. Pi wants `parameters` and a prompt snippet. OMP swap
 - 🧵 **One line per error.** Newlines, escape codes and bidi tricks in echoed text get flattened. No forged lines.
 - 🪤 **The OMP TypeBox trap, defused.** TypeBox is bundled, so OMP has nothing left to rewrite behind your back.
 - 🧪 **Schema rules at definition time.** An open object or a union of literals fails in `defineTool`. Not three weeks later in a model's hands.
-- ⌨️ **A CLI on the side.** `runCli` turns the same tools into citty commands. Flags come from the schema. A hint adds positionals and stdin.
+- ⌨️ **A CLI on the side.** `runCli` turns the same tools into commands, no CLI library needed. Flags come from the schema. A hint adds positionals and stdin.
 - 🌐 **Runs anywhere.** No `node:*` import in the core or the host adapters. The docs site runs them in a browser tab. The CLI is the one Node part, as a CLI should be.
 
 ## 📦 Install
@@ -89,7 +89,7 @@ The typo never reached `execute`. The model gets told what it did wrong and what
 | Pi     | `registerPiTools` from `@agntn/tools/pi`   | `@earendil-works/pi-coding-agent` |
 | OMP    | `registerOmpTools` from `@agntn/tools/omp` | `@oh-my-pi/pi-coding-agent`       |
 | AI SDK | `toAiTool` from `@agntn/tools/ai`          | `ai`                              |
-| CLI    | `runCli` from `@agntn/tools/cli`           | `citty`                           |
+| CLI    | `runCli` from `@agntn/tools/cli`           | none                              |
 
 Install only what you ship. An MCP server doesn't need the AI SDK, and nobody makes it pretend. Every host has its own page with the gotchas: [tools.agntn.dev/hosts](https://tools.agntn.dev/hosts).
 
