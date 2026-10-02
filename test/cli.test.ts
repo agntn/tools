@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { runCommand } from "citty";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { commandName, createCli, normalizeArgv, type CliOptions } from "../src/cli.ts";
+import { commandName, createCli, normalizeArgv, toolCommand, type CliOptions } from "../src/cli.ts";
 import { defineTool, ToolDefinitionError, Type } from "../src/index.ts";
 import { demoTools, DemoError, echo } from "./fixtures/demo.ts";
 
@@ -176,6 +176,9 @@ describe("CLI commands", () => {
     expect(await run(["info"], cli)).toEqual({ stdout: "", stderr: "no info\n", exitCode: 1 });
     // A lazy command's alias is not a word for the fallback.
     expect((await run(["i"], cli)).stderr).toBe("no info\n");
+    // The alias of a replaced tool command goes with it, to the fallback.
+    const replaced: CliOptions = { ...options, commands: { measure: { run: () => {} } } };
+    expect(await normalizeArgv(replaced, ["len"])).toEqual(["echo", "len"]);
   });
 });
 
@@ -204,6 +207,23 @@ describe("CLI definitions", () => {
     );
     await expect(build(tool({ stdin: ["text"] }))).rejects.toThrow(/must be a string/);
     await expect(build(tool({}, true))).rejects.toThrow(/reserved flag --json/);
+  });
+
+  it("rejects two options citty reads under one spelling", () => {
+    const clash = defineTool({
+      name: "demo_clash",
+      title: "Clash",
+      description: "x",
+      effect: "read",
+      input: Type.Object(
+        { cache: Type.Optional(Type.Boolean()), noCache: Type.Optional(Type.String()) },
+        { additionalProperties: false },
+      ),
+      execute: () => ({ content: [], details: null }),
+    });
+    expect(() => toolCommand(options, clash)).toThrow(
+      "demo_clash: properties cache and noCache both answer to --no-cache",
+    );
   });
 
   it("rejects two commands of one name and a default that names none", () => {

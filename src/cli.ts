@@ -135,7 +135,7 @@ function toolFields(tool: ToolDefinition): Field[] {
   ];
   const required = (tool.input.required as readonly string[] | undefined) ?? [];
   const flags = new Set<string>();
-  return keys.map((key): Field => {
+  const fields = keys.map((key): Field => {
     const field: Field = {
       key,
       schema: properties[key] ?? {},
@@ -162,6 +162,33 @@ function toolFields(tool: ToolDefinition): Field[] {
     flags.add(field.flag);
     return field;
   });
+  assertOneOptionPerSpelling(tool, fields);
+  return fields;
+}
+
+/**
+ * Every spelling citty reads for an option names one property: a boolean also
+ * answers to `--no-<flag>`, so a boolean `cache` and a property `noCache`
+ * would both claim `--no-cache`, and the property name works as a flag too.
+ *
+ * @param tool - Tool the fields belong to.
+ * @param fields - The tool's fields.
+ * @throws {ToolDefinitionError} When two options share a spelling.
+ */
+function assertOneOptionPerSpelling(tool: ToolDefinition, fields: readonly Field[]): void {
+  const owners = new Map<string, string>();
+  for (const field of fields.filter((each) => !each.positional)) {
+    const negation = field.kind === "boolean" ? [`no-${field.flag}`] : [];
+    for (const spelling of new Set([field.flag, field.key, ...negation])) {
+      const owner = owners.get(spelling);
+      if (owner !== undefined) {
+        throw new ToolDefinitionError(
+          `${tool.name}: properties ${owner} and ${field.key} both answer to --${spelling}`,
+        );
+      }
+      owners.set(spelling, field.key);
+    }
+  }
 }
 
 /**
@@ -559,8 +586,12 @@ export async function normalizeArgv(
  */
 async function namesCommand(options: CliOptions, word: string): Promise<boolean> {
   const commands = Object.values(options.commands ?? {});
+  // A package command replaces the generated one, and its aliases go with it.
+  const generated = options.tools.filter(
+    (tool) => !Object.hasOwn(options.commands ?? {}, commandName(tool)),
+  );
   const names = new Set([
-    ...options.tools.flatMap((tool) => [commandName(tool), ...(tool.cli?.aliases ?? [])]),
+    ...generated.flatMap((tool) => [commandName(tool), ...(tool.cli?.aliases ?? [])]),
     ...(options.mcp === true ? ["mcp"] : []),
     ...Object.keys(options.commands ?? {}),
   ]);
