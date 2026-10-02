@@ -49,6 +49,22 @@ export interface ToolResult<Details = unknown> {
  */
 export type ToolEffect = "read" | "write" | "destructive";
 
+/**
+ * How a tool reads on the command line. Without hints the command is the tool
+ * name without its package prefix, in kebab case, and every property is a flag.
+ */
+export interface ToolCliHints {
+  /** Command name instead of the derived one. */
+  readonly command?: string;
+  readonly aliases?: readonly string[];
+  /** Line in the command list. Defaults to the first sentence of `description`. */
+  readonly description?: string;
+  /** Properties taken in this order as positional arguments instead of flags. */
+  readonly positional?: readonly string[];
+  /** String properties that read stdin when given as `-`. */
+  readonly stdin?: readonly string[];
+}
+
 /** Per-call context the adapters hand to `execute`. */
 export interface ToolCallContext {
   signal?: AbortSignal;
@@ -71,6 +87,8 @@ export interface ToolDefinition<Input extends TObject = TObject, Details = unkno
   /** The call reaches outside the local machine. */
   readonly openWorld?: boolean;
   readonly input: Input;
+  /** Command line shape for `@agntn/tools/cli`. No other surface reads it. */
+  readonly cli?: ToolCliHints;
   /**
    * Runs the tool on input that already passed {@link validateInput}.
    *

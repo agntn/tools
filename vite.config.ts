@@ -19,7 +19,13 @@ export default defineConfig({
             /* A definition carries TypeBox schemas and an abort signal; no adapter writes to them. */
             {
               from: "file",
-              name: ["ToolDefinition", "ToolCallContext", "ToolResult", "OmpToolOptions"],
+              name: [
+                "ToolDefinition",
+                "ToolCallContext",
+                "ToolResult",
+                "OmpToolOptions",
+                "CliOptions",
+              ],
             },
             {
               from: "package",
@@ -27,6 +33,12 @@ export default defineConfig({
               package: "@oh-my-pi/pi-coding-agent",
             },
             { from: "package", name: "ExtensionAPI", package: "@earendil-works/pi-coding-agent" },
+            /* citty's command types are mutable records; the adapter only reads them. */
+            {
+              from: "package",
+              name: ["CommandContext", "CommandDef", "Resolvable", "SubCommandsDef"],
+              package: "citty",
+            },
           ],
           ignoreInferredTypes: true,
         },
