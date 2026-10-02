@@ -8,7 +8,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { stripVTControlCharacters } from "node:util";
+import { parseArgs, stripVTControlCharacters } from "node:util";
 
 import type { ArgDef, ArgsDef, CommandContext, CommandDef, SubCommandsDef } from "citty";
 import { Value } from "typebox/value";
@@ -169,7 +169,7 @@ function toolFields(tool: ToolDefinition): Field[] {
 /**
  * Every spelling citty reads for an option names one property: a boolean also
  * answers to `--no-<flag>`, so a boolean `cache` and a property `noCache`
- * would both claim `--no-cache`, and the property name works as a flag too.
+ * would both claim `--no-cache`.
  *
  * @param tool - Tool the fields belong to.
  * @param fields - The tool's fields.
@@ -179,7 +179,7 @@ function assertOneOptionPerSpelling(tool: ToolDefinition, fields: readonly Field
   const owners = new Map<string, string>();
   for (const field of fields.filter((each) => !each.positional)) {
     const negation = field.kind === "boolean" ? [`no-${field.flag}`] : [];
-    for (const spelling of new Set([field.flag, field.key, ...negation])) {
+    for (const spelling of [field.flag, ...negation]) {
       const owner = owners.get(spelling);
       if (owner !== undefined) {
         throw new ToolDefinitionError(
@@ -196,117 +196,181 @@ function assertOneOptionPerSpelling(tool: ToolDefinition, fields: readonly Field
  * @returns {ArgDef} The citty argument.
  */
 function argDef(field: Field): ArgDef {
-  const { schema, required } = field;
-  const stated = typeof schema.description === "string" ? schema.description : "";
-  const description = field.stdin ? `${stated} (- reads stdin)`.trim() : stated;
-  if (field.positional) return { type: "positional", description, required };
+  const { schema } = field;
+  const parts = [
+    typeof schema.description === "string" ? schema.description : "",
+    field.stdin ? "(- reads stdin)" : "",
+    field.required ? "(Required)" : "",
+  ];
+  const description = parts.filter((part) => part !== "").join(" ");
+  // Nothing here is required or an enum to citty: its parse differs from
+  // parseWords, so it must not reject a command line on its own reading.
+  if (field.positional) return { type: "positional", description, required: false };
   if (field.kind === "boolean") return { type: "boolean", description };
-  if (field.kind === "enum") {
-    return { type: "enum", description, required, options: [...(schema.enum as string[])] };
-  }
-  const valueHint = field.kind === "string" ? {} : { valueHint: field.kind };
-  return { type: "string", description, required, ...valueHint };
+  return { type: "string", description, valueHint: valueHint(field) };
 }
 
-/** The options a tool command takes, under every spelling citty reads; `null` is `--json`. */
-type OptionTable = Readonly<Record<string, Field | null>>;
+/**
+ * @param field - Option field.
+ * @returns {string} What the value looks like in the usage text.
+ */
+function valueHint(field: Field): string {
+  if (field.kind === "enum") return (field.schema.enum as string[]).join("|");
+  return field.kind === "string" ? field.flag : field.kind;
+}
+
+interface ParsedWords {
+  /** Raw values by property: a string, or `true`/`false` for a boolean. */
+  readonly values: Readonly<Record<string, string | boolean>>;
+  readonly json: boolean;
+  readonly errors: readonly string[];
+}
 
 /**
+ * Reads the words after the command name. This is the only parse whose values
+ * reach the tool: citty's own parse drops every `--no-*` word before it starts
+ * and reads `-times` as five short flags, so it serves the usage text alone.
+ * Only `--flag`, `--flag=value` and, for a boolean, `--no-flag` are options;
+ * an unknown option, a single dash before a name, a missing value, a value
+ * given twice or a positional too many is a failure, never a skipped word.
+ *
+ * @param rawArgs - Words after the command name.
  * @param fields - The command's fields.
- * @returns {OptionTable} Options by flag, property name and, for a boolean, `no-` flag.
+ * @returns {ParsedWords} Values by property and the failures, one per line.
  */
-function optionTable(fields: readonly Field[]): OptionTable {
-  const options: Record<string, Field | null> = {};
-  for (const field of fields.filter((each) => !each.positional)) {
-    options[field.flag] = field;
-    options[field.key] = field;
-    if (field.kind === "boolean") options[`no-${field.flag}`] = field;
-  }
-  options["json"] = null;
-  return options;
-}
+function parseWords(rawArgs: readonly string[], fields: readonly Field[]): ParsedWords {
+  const options: Readonly<Record<string, Field>> = Object.fromEntries(
+    fields.filter((field) => !field.positional).map((field) => [field.flag, field]),
+  );
+  const { tokens } = parseArgs({
+    args: [...rawArgs],
+    options: Object.fromEntries([
+      ...Object.values(options).map((field) => [
+        field.flag,
+        { type: field.kind === "boolean" ? "boolean" : "string" },
+      ]),
+      ["json", { type: "boolean" }],
+    ]) as Record<string, { type: "boolean" | "string" }>,
+    strict: false,
+    allowPositionals: true,
+    allowNegative: true,
+    tokens: true,
+  });
 
-interface OptionScan {
-  readonly error?: string;
-  /** Property whose value the option sets. */
-  readonly key?: string;
-  /** The option takes the next word as its value. */
-  readonly takesValue: boolean;
-}
-
-/**
- * @param word - The word, starting with `-`.
- * @param options - Options the command takes.
- * @param seen - Properties set by earlier options.
- * @returns {OptionScan} What the word does.
- */
-function scanOption(word: string, options: OptionTable, seen: readonly string[]): OptionScan {
-  const [name = "", ...value] = word.replace(/^--?/, "").split("=");
-  if (!Object.hasOwn(options, name)) {
-    const takes = [...new Set(Object.values(options).map((field) => field?.flag ?? "json"))];
-    return {
-      error: `Invalid arguments: unknown option ${JSON.stringify(word)}; takes ${takes.map((flag) => `--${flag}`).join(", ")}`,
-      takesValue: false,
-    };
+  const values: Record<string, string | boolean> = {};
+  const errors: string[] = [];
+  const positionals: string[] = [];
+  let json = false;
+  for (const token of tokens) {
+    if (token.kind === "positional") positionals.push(token.value);
+    if (token.kind !== "option") continue;
+    const read = readOption(options, token, rawArgs[token.index] ?? "", Object.keys(values));
+    if ("error" in read) errors.push(read.error);
+    else if ("json" in read) json = true;
+    else values[read.key] = read.value;
   }
-  const field = options[name];
-  if (field === undefined || field === null || field.kind === "boolean")
-    return { takesValue: false };
   return {
-    ...(seen.includes(field.key)
-      ? { error: `Invalid arguments: --${field.flag} given more than once` }
-      : {}),
-    key: field.key,
-    takesValue: value.length === 0,
+    values: { ...values, ...positionalValues(fields, positionals) },
+    json,
+    errors: [...new Set(errors.length > 0 ? errors : extraPositionals(fields, positionals))],
   };
 }
 
 /**
- * @param rawArgs - Words after the command name.
- * @param options - Options the command takes.
- * @returns {{ errors: string[]; positionals: number }} Option failures and the positional count.
+ * @param fields - The command's fields.
+ * @param positionals - Positional words in order.
+ * @returns {Record<string, string>} Each positional property with its word.
  */
-function scanWords(
-  rawArgs: readonly string[],
-  options: OptionTable,
-): { errors: string[]; positionals: number } {
-  const errors: string[] = [];
-  const seen: string[] = [];
-  let positionals = 0;
-  for (let index = 0; index < rawArgs.length; index++) {
-    const word = rawArgs[index] ?? "";
-    if (word === "--") return { errors, positionals: positionals + rawArgs.length - index - 1 };
-    if (!word.startsWith("-") || word === "-") {
-      positionals++;
-      continue;
-    }
-    const scanned = scanOption(word, options, seen);
-    if (scanned.error !== undefined) errors.push(scanned.error);
-    if (scanned.key !== undefined) seen.push(scanned.key);
-    if (scanned.takesValue) index++;
-  }
-  return { errors, positionals };
+function positionalValues(
+  fields: readonly Field[],
+  positionals: readonly string[],
+): Record<string, string> {
+  const takes = fields.filter((field) => field.positional);
+  return Object.fromEntries(
+    takes.flatMap((field, index) => {
+      const value = positionals[index];
+      return value === undefined ? [] : [[field.key, value]];
+    }),
+  );
 }
 
 /**
- * Finds what citty would accept without a word: an undeclared option, which
- * citty takes as a boolean and so shifts the next word into the positionals,
- * a value option given twice, of which citty keeps the last, and a positional
- * argument the tool does not take.
- *
- * @param rawArgs - Words after the command name.
  * @param fields - The command's fields.
- * @returns {string[]} One failure per line, in the core's format.
+ * @param positionals - Positional words in order.
+ * @returns {string[]} The failure when there are more words than positional properties.
  */
-function commandLineErrors(rawArgs: readonly string[], fields: readonly Field[]): string[] {
-  const { errors, positionals } = scanWords(rawArgs, optionTable(fields));
-  // After an unknown option its value reads as a positional; the option is the failure to name.
-  const extra = positionals - fields.filter((field) => field.positional).length;
-  if (extra <= 0 || errors.length > 0) return errors;
-  return [
-    ...errors,
-    `Invalid arguments: ${extra} unexpected positional argument${extra === 1 ? "" : "s"}`,
-  ];
+function extraPositionals(fields: readonly Field[], positionals: readonly string[]): string[] {
+  const extra = positionals.length - fields.filter((field) => field.positional).length;
+  if (extra <= 0) return [];
+  return [`Invalid arguments: ${extra} unexpected positional argument${extra === 1 ? "" : "s"}`];
+}
+
+interface OptionToken {
+  readonly name: string;
+  readonly rawName: string;
+  readonly value?: string | undefined;
+  readonly inlineValue?: boolean | undefined;
+}
+
+type OptionRead =
+  | { readonly error: string }
+  | { readonly json: true }
+  | { readonly key: string; readonly value: string | boolean };
+
+/**
+ * @param options - Option fields by flag.
+ * @param token - The token `util.parseArgs` made.
+ * @returns {Field | "json" | undefined} What the token names under a spelling it takes.
+ */
+function optionField(
+  options: Readonly<Record<string, Field>>,
+  token: OptionToken,
+): Field | "json" | undefined {
+  if (token.rawName === "--json") return "json";
+  const field = Object.hasOwn(options, token.name) ? options[token.name] : undefined;
+  if (field === undefined || token.rawName === `--${token.name}`) return field;
+  return token.rawName === `--no-${token.name}` && field.kind === "boolean" ? field : undefined;
+}
+
+/**
+ * @param options - Option fields by flag.
+ * @param token - The token `util.parseArgs` made.
+ * @param word - The command line word it came from.
+ * @param seen - Properties set by earlier words.
+ * @returns {OptionRead} The value it sets, `--json`, or the failure.
+ */
+function readOption(
+  options: Readonly<Record<string, Field>>,
+  token: OptionToken,
+  word: string,
+  seen: readonly string[],
+): OptionRead {
+  const field = optionField(options, token);
+  if (field === undefined) {
+    const takes = [...Object.keys(options), "json"].map((flag) => `--${flag}`).join(", ");
+    return { error: `Invalid arguments: unknown option ${JSON.stringify(word)}; takes ${takes}` };
+  }
+  if (field === "json") {
+    return token.inlineValue === true
+      ? { error: "Invalid arguments: --json takes no value" }
+      : { json: true };
+  }
+  const problem = optionProblem(field, token, seen.includes(field.key));
+  if (problem !== undefined) return { error: `Invalid arguments: --${field.flag} ${problem}` };
+  const value = field.kind === "boolean" ? token.rawName === `--${field.flag}` : token.value;
+  return { key: field.key, value: value ?? "" };
+}
+
+/**
+ * @param field - The option's field.
+ * @param token - Its token.
+ * @param seen - Whether an earlier word set the property already.
+ * @returns {string | undefined} What is wrong with the option, if anything.
+ */
+function optionProblem(field: Field, token: OptionToken, seen: boolean): string | undefined {
+  if (seen) return "given more than once";
+  if (field.kind === "boolean") return token.inlineValue === true ? "takes no value" : undefined;
+  return token.value === undefined ? "needs a value" : undefined;
 }
 
 /**
@@ -350,19 +414,25 @@ function fieldValue(field: Field, raw: unknown): { value: unknown } | { error: s
  *
  * @param tool - Tool to call.
  * @param fields - The command's fields.
- * @param args - citty's parsed arguments.
+ * @param values - Raw values by property, from {@link parseWords}.
  * @returns {unknown} The input object.
  * @throws {ToolInputError} When a JSON value does not parse.
  */
 function toolInput(
   tool: ToolDefinition,
   fields: readonly Field[],
-  args: Readonly<Record<string, unknown>>,
+  values: Readonly<Record<string, string | boolean>>,
 ): unknown {
   const input: Record<string, unknown> = {};
+  const fromStdin = fields.filter((field) => field.stdin && values[field.key] === "-");
+  if (fromStdin.length > 1) {
+    throw new ToolInputError([
+      `Invalid arguments: stdin can feed one argument, not ${fromStdin.map((field) => field.key).join(" and ")}`,
+    ]);
+  }
   const errors: string[] = [];
   for (const field of fields) {
-    const raw = args[field.flag];
+    const raw = values[field.key];
     if (raw === undefined) continue;
     const read = fieldValue(field, raw);
     if ("error" in read) errors.push(`Invalid arguments at /${field.key}: ${read.error}`);
@@ -458,13 +528,13 @@ export function toolCommand(options: CliOptions, tool: ToolDefinition): CommandD
     args,
     async run(context: CommandContext) {
       try {
-        const errors = commandLineErrors(context.rawArgs, fields);
-        if (errors.length > 0) throw new ToolInputError(errors);
-        const result = await invokeTool(tool, toolInput(tool, fields, context.args));
+        const words = parseWords(context.rawArgs, fields);
+        if (words.errors.length > 0) throw new ToolInputError(words.errors);
+        const result = await invokeTool(tool, toolInput(tool, fields, words.values));
         if (result.isError === true) {
           writeLine("stderr", sanitizeText(resultText(result)));
           process.exitCode = 1;
-        } else if (context.args["json"] === true) {
+        } else if (words.json) {
           writeLine("stdout", detailsJson(result.details));
         } else {
           writeLine("stdout", sanitizeText(resultText(result)));

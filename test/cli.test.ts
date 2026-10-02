@@ -133,7 +133,63 @@ describe("CLI commands", () => {
     expect((await run(["echo", "hi", "there"])).stderr).toBe(
       "Invalid arguments: 1 unexpected positional argument\n",
     );
+    expect((await run(["echo", "hi", "-times", "2"])).stderr).toBe(
+      'Invalid arguments: unknown option "-times"; takes --mode, --times, --spaced, --json\n',
+    );
+    expect((await run(["echo", "hi", "--no-times", "2"])).stderr).toBe(
+      'Invalid arguments: unknown option "--no-times"; takes --mode, --times, --spaced, --json\n',
+    );
+    expect((await run(["echo", "hi", "--times"])).stderr).toBe(
+      "Invalid arguments: --times needs a value\n",
+    );
+    expect((await run(["echo", "hi", "--spaced=yes"])).stderr).toBe(
+      "Invalid arguments: --spaced takes no value\n",
+    );
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("takes only the declared kebab spelling of a property", async () => {
+    const snake = defineTool({
+      name: "demo_snake",
+      title: "Snake",
+      description: "x",
+      effect: "read",
+      input: Type.Object(
+        { read_only: Type.Optional(Type.String()), maxItems: Type.Optional(Type.Integer()) },
+        { additionalProperties: false },
+      ),
+      execute: (input) => ({
+        content: [{ type: "text", text: JSON.stringify(input) }],
+        details: null,
+      }),
+    });
+    const cli: CliOptions = { ...options, tools: [snake], default: undefined, fallback: undefined };
+    expect((await run(["snake", "--read-only", "x", "--max-items", "2"], cli)).stdout).toBe(
+      '{"read_only":"x","maxItems":2}\n',
+    );
+    for (const word of ["--read_only", "--maxItems"]) {
+      expect((await run(["snake", word, "x"], cli)).stderr).toBe(
+        `Invalid arguments: unknown option "${word}"; takes --read-only, --max-items, --json\n`,
+      );
+    }
+  });
+
+  it("lets stdin feed one argument only", async () => {
+    const pair = defineTool({
+      name: "demo_pair",
+      title: "Pair",
+      description: "x",
+      effect: "read",
+      input: Type.Object({ a: Type.String(), b: Type.String() }, { additionalProperties: false }),
+      cli: { positional: ["a", "b"], stdin: ["a", "b"] },
+      execute: () => ({ content: [], details: null }),
+    });
+    const cli: CliOptions = { ...options, tools: [pair], default: undefined, fallback: undefined };
+    expect(await run(["pair", "-", "-"], cli)).toEqual({
+      stdout: "",
+      stderr: "Invalid arguments: stdin can feed one argument, not a and b\n",
+      exitCode: 1,
+    });
   });
 
   it("prints a returned failure on stderr with exit code 1", async () => {
@@ -256,7 +312,7 @@ describe("CLI process", () => {
     expect(help.stdout).not.toContain("\u001B[");
     const bad = spawnCli(["echo", "hi", "--mode", "x"]);
     expect(bad.status).toBe(1);
-    expect(bad.stderr).toContain("Expected one of: plain, loud.");
+    expect(bad.stderr).toBe("Invalid arguments at /mode: must be one of plain, loud\n");
     expect(bad.stderr).not.toContain("\u001B[");
   });
 
