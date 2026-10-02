@@ -35,6 +35,10 @@
     "./ai": {
       "types": "./dist/ai.d.mts",
       "import": "./dist/ai.mjs"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.mts",
+      "import": "./dist/cli.mjs"
     }
   },
   "publishConfig": {

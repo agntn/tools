@@ -19,7 +19,14 @@ export default defineConfig({
             /* A definition carries TypeBox schemas and an abort signal; no adapter writes to them. */
             {
               from: "file",
-              name: ["ToolDefinition", "ToolCallContext", "ToolResult", "OmpToolOptions"],
+              name: [
+                "ToolDefinition",
+                "ToolCallContext",
+                "ToolResult",
+                "OmpToolOptions",
+                "CliOptions",
+                "Command",
+              ],
             },
             {
               from: "package",
