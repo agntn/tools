@@ -47,6 +47,14 @@ export interface CliOptions {
   readonly expected?: (error: unknown) => boolean;
 }
 
+/** Thrown by a tool command whose words ask for `--help`; the dispatcher prints its usage. */
+class HelpRequest extends Error {
+  override name = "HelpRequest";
+}
+
+/** Commands built by {@link toolCommand}: they find `--help` in their own parse. */
+const TOOL_COMMANDS = new WeakSet<CommandDef>();
+
 /** Flags every tool command answers itself. */
 const RESERVED_FLAGS = new Set(["help", "version", "json"]);
 
@@ -88,9 +96,27 @@ function flagName(key: string): string {
  * @returns {string} The hinted command, or the tool name without its package prefix, in kebab case.
  */
 export function commandName(tool: ToolDefinition): string {
-  if (tool.cli?.command !== undefined) return tool.cli.command;
+  if (tool.cli?.command !== undefined) return commandWord(tool.name, tool.cli.command);
   const separator = tool.name.indexOf("_");
   return (separator === -1 ? tool.name : tool.name.slice(separator + 1)).replaceAll("_", "-");
+}
+
+/** A command word citty can dispatch to: not empty, not an option, nothing that forges a line. */
+const COMMAND_WORD = /^[a-z0-9_][a-z0-9_.:-]*$/i;
+
+/**
+ * @param owner - Tool or CLI the name belongs to, for the error.
+ * @param word - Command name or alias.
+ * @returns {string} The word, checked.
+ * @throws {ToolDefinitionError} When citty could never dispatch to it.
+ */
+function commandWord(owner: string, word: string): string {
+  if (!COMMAND_WORD.test(word)) {
+    throw new ToolDefinitionError(
+      `${owner}: command ${JSON.stringify(word)} must match ${COMMAND_WORD}`,
+    );
+  }
+  return word;
 }
 
 /**
@@ -233,6 +259,8 @@ interface ParsedWords {
   /** Raw values by property: a string, or `true`/`false` for a boolean. */
   readonly values: Readonly<Record<string, string | boolean>>;
   readonly json: boolean;
+  /** `--help` or `-h` before any `--`; a value or a word after `--` is not one. */
+  readonly help: boolean;
   readonly errors: readonly string[];
 }
 
@@ -270,18 +298,19 @@ function parseWords(rawArgs: readonly string[], fields: readonly Field[]): Parse
   const values = emptyRecord<string | boolean>();
   const errors: string[] = [];
   const positionals: string[] = [];
-  let json = false;
+  const flags = new Set<string>();
   for (const token of tokens) {
     if (token.kind === "positional") positionals.push(token.value);
     if (token.kind !== "option") continue;
     const read = readOption(options, token, rawArgs[token.index] ?? "", Object.keys(values));
     if ("error" in read) errors.push(read.error);
-    else if ("json" in read) json = true;
+    else if ("flag" in read) flags.add(read.flag);
     else values[read.key] = read.value;
   }
   return {
     values: Object.assign(values, positionalValues(fields, positionals)),
-    json,
+    json: flags.has("json"),
+    help: flags.has("help"),
     errors: [...new Set(errors.length > 0 ? errors : extraPositionals(fields, positionals))],
   };
 }
@@ -327,19 +356,20 @@ interface OptionToken {
 
 type OptionRead =
   | { readonly error: string }
-  | { readonly json: true }
+  | { readonly flag: "json" | "help" }
   | { readonly key: string; readonly value: string | boolean };
 
 /**
  * @param options - Option fields by flag.
  * @param token - The token `util.parseArgs` made.
- * @returns {Field | "json" | undefined} What the token names under a spelling it takes.
+ * @returns {Field | "json" | "help" | undefined} What the token names under a spelling it takes.
  */
 function optionField(
   options: Readonly<Record<string, Field>>,
   token: OptionToken,
-): Field | "json" | undefined {
+): Field | "json" | "help" | undefined {
   if (token.rawName === "--json") return "json";
+  if (token.rawName === "--help" || token.rawName === "-h") return "help";
   const field = Object.hasOwn(options, token.name) ? options[token.name] : undefined;
   if (field === undefined || token.rawName === `--${token.name}`) return field;
   return token.rawName === `--no-${token.name}` && field.kind === "boolean" ? field : undefined;
@@ -363,10 +393,10 @@ function readOption(
     const takes = [...Object.keys(options), "json"].map((flag) => `--${flag}`).join(", ");
     return { error: `Invalid arguments: unknown option ${JSON.stringify(word)}; takes ${takes}` };
   }
-  if (field === "json") {
+  if (field === "json" || field === "help") {
     return token.inlineValue === true
-      ? { error: "Invalid arguments: --json takes no value" }
-      : { json: true };
+      ? { error: `Invalid arguments: ${token.rawName} takes no value` }
+      : { flag: field };
   }
   const problem = optionProblem(field, token, seen.includes(field.key));
   if (problem !== undefined) return { error: `Invalid arguments: --${field.flag} ${problem}` };
@@ -500,6 +530,7 @@ function fail(lines: readonly string[]): void {
  * @param error - What the command threw.
  */
 function handleError(options: CliOptions, error: unknown): void {
+  if (error instanceof HelpRequest) throw error;
   if (error instanceof ToolInputError) fail(error.lines);
   else if (options.expected?.(error) === true) {
     fail([error instanceof Error ? error.message : String(error)]);
@@ -545,7 +576,7 @@ export function toolCommand(options: CliOptions, tool: ToolDefinition): CommandD
   args["json"] = { type: "boolean", description: "Print the details as JSON instead of the text" };
   const [summary = tool.title] = tool.description.split(/(?<=[.!?])\s/, 1);
 
-  return {
+  const command: CommandDef = {
     meta: {
       name: commandName(tool),
       description: tool.cli?.description ?? summary,
@@ -555,6 +586,7 @@ export function toolCommand(options: CliOptions, tool: ToolDefinition): CommandD
     async run(context: CommandContext) {
       try {
         const words = parseWords(context.rawArgs, fields);
+        if (words.help) throw new HelpRequest();
         if (words.errors.length > 0) throw new ToolInputError(words.errors);
         const result = await invokeTool(tool, toolInput(tool, fields, words.values));
         if (result.isError === true) {
@@ -572,6 +604,8 @@ export function toolCommand(options: CliOptions, tool: ToolDefinition): CommandD
       }
     },
   };
+  TOOL_COMMANDS.add(command);
+  return command;
 }
 
 /**
@@ -631,9 +665,22 @@ function generatedTools(options: CliOptions): ToolDefinition[] {
 /**
  * @param options - CLI options.
  * @param generated - Tools that keep a generated command.
+ * @throws {ToolDefinitionError} When an alias or a package command name is no command word.
+ */
+function assertCommandWords(options: CliOptions, generated: readonly ToolDefinition[]): void {
+  for (const alias of generated.flatMap((tool) => tool.cli?.aliases ?? [])) {
+    commandWord(options.name, alias);
+  }
+  for (const name of Object.keys(options.commands ?? {})) commandWord(options.name, name);
+}
+
+/**
+ * @param options - CLI options.
+ * @param generated - Tools that keep a generated command.
  * @throws {ToolDefinitionError} When two generated commands, aliases or `mcp` share a name.
  */
 function assertUniqueNames(options: CliOptions, generated: readonly ToolDefinition[]): void {
+  assertCommandWords(options, generated);
   const mcp = options.mcp === true && !Object.hasOwn(options.commands ?? {}, "mcp");
   const names = [
     ...generated.flatMap((tool) => [commandName(tool), ...(tool.cli?.aliases ?? [])]),
@@ -723,7 +770,7 @@ async function namesCommand(options: CliOptions, word: string): Promise<boolean>
  * @returns {Promise<string[]>} Its `meta.alias` entries.
  */
 async function commandAliases(command: SubCommandsDef[string]): Promise<string[]> {
-  const resolved = await (typeof command === "function" ? command() : command);
+  const resolved = await resolveCommand(command);
   const meta = await (typeof resolved.meta === "function" ? resolved.meta() : resolved.meta);
   const alias = meta?.alias ?? [];
   return typeof alias === "string" ? [alias] : [...alias];
@@ -764,20 +811,106 @@ export async function runCli(
   stdout.on("error", exitOnClosedPipe);
   stderr.on("error", exitOnClosedPipe);
   const main = createCli(options);
-  const { renderUsage, runMain } = await import("citty");
-  if (!colors) {
-    const { error } = console;
-    console.error = (...parts: readonly unknown[]) => {
-      error(
-        ...parts.map((part) => (typeof part === "string" ? stripVTControlCharacters(part) : part)),
-      );
-    };
-  }
-  await runMain(main, {
-    rawArgs: await normalizeArgv(options, argv),
-    async showUsage(command, parent) {
-      const usage = await renderUsage(command, parent);
-      console.log(`${colors ? usage : stripVTControlCharacters(usage)}\n`);
-    },
+  const citty = await import("citty");
+  const usage = async (command: CommandDef, parent?: CommandDef): Promise<void> => {
+    const text = await citty.renderUsage(command, parent);
+    writeLine("stdout", `${colors ? text : stripVTControlCharacters(text)}\n`);
+  };
+  await dispatch(options, main, await normalizeArgv(options, argv), {
+    usage,
+    run: (command, rawArgs) => citty.runCommand(command, { rawArgs: [...rawArgs] }),
   });
+}
+
+interface Dispatcher {
+  readonly usage: (command: CommandDef, parent?: CommandDef) => Promise<void>;
+  readonly run: (command: CommandDef, rawArgs: readonly string[]) => Promise<unknown>;
+}
+
+/**
+ * Picks the command and runs it, in place of citty's `runMain`: that one
+ * takes `--help` anywhere on the line, also after `--` and as an option's
+ * value, and prints its errors with the raw command word in them. Here the
+ * main command reads only its first word, a tool command finds `--help` in
+ * its own parse, and every error line goes through {@link sanitizeLine}.
+ *
+ * @param options - CLI options.
+ * @param main - The main command.
+ * @param argv - Words after `normalizeArgv`.
+ * @param citty - Usage printer and command runner.
+ */
+async function dispatch(
+  options: CliOptions,
+  main: CommandDef,
+  argv: readonly string[],
+  citty: Dispatcher,
+): Promise<void> {
+  const [first, ...rest] = argv;
+  if (argv.length === 1 && (first === "--version" || first === "-v")) {
+    writeLine("stdout", options.version);
+    return;
+  }
+  if (first === undefined || first === "--help" || first === "-h") {
+    await citty.usage(main);
+    if (first === undefined) fail(["No command specified"]);
+    return;
+  }
+  const command = await findCommand(main, first);
+  if (command === undefined) {
+    await citty.usage(main);
+    fail([`Unknown command ${JSON.stringify(first)}`]);
+    return;
+  }
+  await runCommandLine(command, main, rest, citty);
+}
+
+/**
+ * @param command - The chosen command.
+ * @param main - The main command, for the usage title.
+ * @param rawArgs - Words after the command name.
+ * @param citty - Usage printer and command runner.
+ */
+async function runCommandLine(
+  command: CommandDef,
+  main: CommandDef,
+  rawArgs: readonly string[],
+  citty: Dispatcher,
+): Promise<void> {
+  // A package command has no parse of ours: `--help` counts before any `--`.
+  const end = rawArgs.includes("--") ? rawArgs.indexOf("--") : rawArgs.length;
+  const help = rawArgs.slice(0, end).some((word) => word === "--help" || word === "-h");
+  try {
+    if (!TOOL_COMMANDS.has(command) && help) throw new HelpRequest();
+    await citty.run(command, rawArgs);
+  } catch (error) {
+    const known =
+      error instanceof HelpRequest || (error instanceof Error && error.name === "CLIError");
+    if (!known) throw error;
+    await citty.usage(command, main);
+    if (!(error instanceof HelpRequest)) fail([error.message]);
+  }
+}
+
+/**
+ * @param main - The main command.
+ * @param word - First word of the command line.
+ * @returns {Promise<CommandDef | undefined>} The command with this name or alias.
+ */
+async function findCommand(main: CommandDef, word: string): Promise<CommandDef | undefined> {
+  const commands = (main.subCommands ?? {}) as SubCommandsDef;
+  const named = Object.hasOwn(commands, word) ? commands[word] : undefined;
+  if (named !== undefined) return resolveCommand(named);
+  for (const command of Object.values(commands)) {
+    const resolved = await resolveCommand(command);
+    if ((await commandAliases(resolved)).includes(word)) return resolved;
+  }
+  return undefined;
+}
+
+/**
+ * @param command - A command as citty takes it: the definition, a promise or a loader.
+ * @returns {Promise<CommandDef>} The definition.
+ */
+async function resolveCommand(command: SubCommandsDef[string]): Promise<CommandDef> {
+  return await (typeof command === "function" ? command() : command);
 }

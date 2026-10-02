@@ -301,6 +301,12 @@ describe("CLI definitions", () => {
     );
     await expect(build(tool({ stdin: ["text"] }))).rejects.toThrow(/must be a string/);
     await expect(build(tool({}, true))).rejects.toThrow(/reserved flag --json/);
+    for (const word of ["--foo", "-x", "", "two words"]) {
+      await expect(build(tool({ command: word }))).rejects.toThrow(/must match/);
+      expect(() =>
+        createCli({ ...options, tools: [tool({ command: "ok", aliases: [word] })] }),
+      ).toThrow(/must match/);
+    }
   });
 
   it("rejects two options citty reads under one spelling", () => {
@@ -380,6 +386,28 @@ describe("CLI process", () => {
       expect(`${answer.stdout}${answer.stderr}`).toMatch(/Unknown command nope|USAGE/);
       expect(`${answer.stdout}${answer.stderr}`).not.toContain(String.fromCodePoint(0x1b));
     }
+  });
+
+  it("keeps a forged command word on one line", () => {
+    const word = `bad${String.fromCodePoint(10)}forged${String.fromCodePoint(0x202e)}x`;
+    const answer = spawnSync(process.execPath, [eagerFixture, word], { encoding: "utf8" });
+    expect(answer.status).toBe(1);
+    expect(answer.stderr).toBe(
+      `Unknown command ${JSON.stringify(word).replace(String.fromCodePoint(0x202e), " ")}\n`,
+    );
+  });
+
+  it("leaves --help after -- to the tool and still answers --help and --version", () => {
+    const literal = spawnSync(process.execPath, [eagerFixture, "measure", "--", "--help"], {
+      encoding: "utf8",
+    });
+    expect([literal.stdout, literal.status]).toEqual(["6\n", 0]);
+    const help = spawnSync(process.execPath, [eagerFixture, "echo", "hi", "--help"], {
+      encoding: "utf8",
+    });
+    expect([help.stdout.includes("USAGE demo echo"), help.status]).toEqual([true, 0]);
+    const version = spawnSync(process.execPath, [eagerFixture, "--version"], { encoding: "utf8" });
+    expect(version.stdout).toBe("1.2.3\n");
   });
 
   it("serves the same tools over MCP with the mcp command", async () => {
