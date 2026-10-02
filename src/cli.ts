@@ -170,8 +170,8 @@ function toolFields(tool: ToolDefinition): Field[] {
       positional: positional.includes(key),
       stdin: stdin.includes(key),
     };
-    assertField(tool, field, flags.has(field.flag));
-    flags.add(field.flag);
+    assertField(tool, field, !field.positional && flags.has(field.flag));
+    if (!field.positional) flags.add(field.flag);
     return field;
   });
   assertOneOptionPerSpelling(tool, fields);
@@ -206,11 +206,12 @@ function assertFlag(tool: ToolDefinition, field: Field): void {
 /**
  * @param tool - Tool the field belongs to.
  * @param field - Field to check.
- * @param taken - Whether a field before it has the same flag.
+ * @param taken - Whether an option before it has the same flag.
  * @throws {ToolDefinitionError} When no word can spell the flag, it is reserved or taken, or a hint does not fit the field.
  */
 function assertField(tool: ToolDefinition, field: Field, taken: boolean): void {
-  assertFlag(tool, field);
+  // A positional is never an option: its key needs no flag spelling.
+  if (!field.positional) assertFlag(tool, field);
   if (taken) {
     throw new ToolDefinitionError(`${tool.name}: two properties take the flag --${field.flag}`);
   }
@@ -321,21 +322,29 @@ interface ParsedWords {
  *
  * @param rawArgs - Words after the command name.
  * @param fields - The command's fields.
+ * @param takesJson - Whether the command takes `--json`.
  * @returns {ParsedWords} Values by property and the failures, one per line.
  */
-function parseWords(rawArgs: readonly string[], fields: readonly Field[]): ParsedWords {
-  const options: Readonly<Record<string, Field>> = Object.fromEntries(
-    fields.filter((field) => !field.positional).map((field) => [field.flag, field]),
-  );
+function parseWords(
+  rawArgs: readonly string[],
+  fields: readonly Field[],
+  takesJson: boolean,
+): ParsedWords {
+  const entries: Array<[string, Field | "json"]> = [
+    ...fields
+      .filter((field) => !field.positional)
+      .map((field): [string, Field] => [field.flag, field]),
+    ...(takesJson ? [["json", "json"] as [string, "json"]] : []),
+  ];
+  const options: Readonly<Record<string, Field | "json">> = Object.fromEntries(entries);
   const { tokens } = parseArgs({
     args: [...rawArgs],
-    options: Object.fromEntries([
-      ...Object.values(options).map((field) => [
-        field.flag,
-        { type: field.kind === "boolean" ? "boolean" : "string" },
+    options: Object.fromEntries(
+      Object.entries(options).map(([flag, field]) => [
+        flag,
+        { type: field === "json" || field.kind === "boolean" ? "boolean" : "string" },
       ]),
-      ["json", { type: "boolean" }],
-    ]) as Record<string, { type: "boolean" | "string" }>,
+    ) as Record<string, { type: "boolean" | "string" }>,
     strict: false,
     allowPositionals: true,
     allowNegative: true,
@@ -407,40 +416,51 @@ type OptionRead =
   | { readonly key: string; readonly value: string | boolean };
 
 /**
- * @param options - Option fields by flag.
+ * `-xh` expands to `-x` and `-h`; only the whole word `-h` asks for help.
+ *
+ * @param token - The token `util.parseArgs` made.
+ * @param word - The command line word it came from.
+ * @returns {boolean} Whether the token is `--help` or the word `-h`.
+ */
+function asksHelp(token: OptionToken, word: string): boolean {
+  return token.rawName === "--help" || word === "-h";
+}
+
+/**
+ * @param options - Option fields by flag, and `--json` when the command takes it.
  * @param token - The token `util.parseArgs` made.
  * @param word - The command line word it came from.
  * @returns {Field | "json" | "help" | undefined} What the token names under a spelling it takes.
  */
 function optionField(
-  options: Readonly<Record<string, Field>>,
+  options: Readonly<Record<string, Field | "json">>,
   token: OptionToken,
   word: string,
 ): Field | "json" | "help" | undefined {
-  if (token.rawName === "--json") return "json";
-  // `-xh` expands to `-x` and `-h`; only the whole word `-h` asks for help.
-  if (token.rawName === "--help" || word === "-h") return "help";
+  if (asksHelp(token, word)) return "help";
   const field = Object.hasOwn(options, token.name) ? options[token.name] : undefined;
+  if (field === "json") return token.rawName === "--json" ? field : undefined;
   if (field === undefined || token.rawName === `--${token.name}`) return field;
   return token.rawName === `--no-${token.name}` && field.kind === "boolean" ? field : undefined;
 }
 
 /**
- * @param options - Option fields by flag.
+ * @param options - Option fields by flag, and `--json` when the command takes it.
  * @param token - The token `util.parseArgs` made.
  * @param word - The command line word it came from.
  * @param seen - Properties set by earlier words.
  * @returns {OptionRead} The value it sets, `--json`, or the failure.
  */
 function readOption(
-  options: Readonly<Record<string, Field>>,
+  options: Readonly<Record<string, Field | "json">>,
   token: OptionToken,
   word: string,
   seen: readonly string[],
 ): OptionRead {
   const field = optionField(options, token, word);
   if (field === undefined) {
-    const takes = [...Object.keys(options), "json"].map((flag) => `--${flag}`).join(", ");
+    const flags = Object.keys(options).map((flag) => `--${flag}`);
+    const takes = flags.length > 0 ? flags.join(", ") : "no options";
     return { error: `Invalid arguments: unknown option ${JSON.stringify(word)}; takes ${takes}` };
   }
   if (field === "json" || field === "help") {
@@ -621,6 +641,8 @@ interface Command {
   /** Line in the command list. */
   readonly summary: string;
   readonly fields: readonly Field[];
+  /** Takes `--json`: a tool command prints its details; `mcp` has none. */
+  readonly json: boolean;
   run(words: ParsedWords): Promise<void>;
 }
 
@@ -636,6 +658,7 @@ function toolCommand(tool: ToolDefinition): Command {
     aliases: (tool.cli?.aliases ?? []).map((alias) => commandWord(tool.name, alias)),
     summary: tool.cli?.description ?? summary,
     fields,
+    json: true,
     async run(words) {
       const result = await invokeTool(tool, toolInput(tool, fields, words.values));
       if (result.isError === true) {
@@ -662,6 +685,7 @@ function mcpCommand(options: CliOptions): Command {
     aliases: [],
     summary: `Run the ${options.name} MCP server over stdio`,
     fields: [],
+    json: false,
     async run() {
       const [{ createMcpServer }, { StdioServerTransport }] = await Promise.all([
         import("./mcp.ts"),
@@ -808,7 +832,7 @@ async function runCommand(
   command: Command,
   rawArgs: readonly string[],
 ): Promise<void> {
-  const words = parseWords(rawArgs, command.fields);
+  const words = parseWords(rawArgs, command.fields, command.json);
   if (words.help) {
     writeLine("stdout", sanitizeText(commandUsage(options, command)));
     return;
@@ -859,6 +883,7 @@ function mainUsage(options: CliOptions, commands: readonly Command[]): string {
 function commandUsage(options: CliOptions, command: Command): string {
   const positional = command.fields.filter((field) => field.positional);
   const flags = command.fields.filter((field) => !field.positional);
+  const takesOptions = flags.length > 0 || command.json;
   const words = positional.map((field) => {
     const name = field.flag.toUpperCase();
     return field.required ? `<${name}>` : `[${name}]`;
@@ -868,13 +893,15 @@ function commandUsage(options: CliOptions, command: Command): string {
       field.kind === "boolean" ? `--[no-]${field.flag}` : `--${field.flag}=<${valueHint(field)}>`,
       fieldDescription(field),
     ]),
-    ["--json", "Print the details as JSON instead of the text"] as [string, string],
+    ...(command.json
+      ? [["--json", "Print the details as JSON instead of the text"] as [string, string]]
+      : []),
     ["-h, --help", "Show this help"] as [string, string],
   ];
   return [
     `${command.summary} (${options.name} ${command.name} v${options.version})`,
     "",
-    `USAGE ${[options.name, command.name, "[OPTIONS]", ...words].join(" ")}`,
+    `USAGE ${[options.name, command.name, ...(takesOptions ? ["[OPTIONS]"] : []), ...words].join(" ")}`,
     ...(positional.length > 0
       ? [
           "",

@@ -394,6 +394,30 @@ describe("CLI definitions", () => {
     expect((await run(["--version"], { ...options, version: forged })).stdout).toBe("1.0 FAKE\n");
   });
 
+  it("takes a positional whose key is no option name", async () => {
+    const json = defineTool({
+      name: "demo_json",
+      title: "Json",
+      description: "x",
+      effect: "read",
+      input: Type.Object({ json: Type.String() }, { additionalProperties: false }),
+      cli: { positional: ["json"] },
+      execute: ({ json: text }) => ({ content: [{ type: "text", text }], details: null }),
+    });
+    const cli: CliOptions = { ...options, tools: [json], default: undefined, fallback: undefined };
+    expect((await run(["json", "{}"], cli)).stdout).toBe("{}\n");
+  });
+
+  it("gives mcp no --json", async () => {
+    const cli: CliOptions = { ...options, mcp: true };
+    expect((await run(["mcp", "--json"], cli)).stderr).toBe(
+      'Invalid arguments: unknown option "--json"; takes no options\n',
+    );
+    const { stdout } = await run(["mcp", "--help"], cli);
+    expect(stdout).not.toContain("--json");
+    expect(stdout).toContain("USAGE demo mcp\n");
+  });
+
   it("sanitizes the usage text", async () => {
     const loud = defineTool({
       ...echo,
