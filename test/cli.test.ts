@@ -336,6 +336,12 @@ describe("CLI definitions", () => {
     expect((await run([], cli)).stdout).toBe("proto\n");
   });
 
+  it("rejects a derived command name that cannot be dispatched", () => {
+    for (const name of ["demo__h", "demo_"]) {
+      expect(() => commandName({ ...echo, name })).toThrow(/must match/);
+    }
+  });
+
   it("rejects two commands of one name and a default that names none", () => {
     expect(() => createCli({ ...options, tools: [echo, tool({ command: "echo" })] })).toThrow(
       /Two commands are named echo/,

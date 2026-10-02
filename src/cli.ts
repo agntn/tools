@@ -98,7 +98,9 @@ function flagName(key: string): string {
 export function commandName(tool: ToolDefinition): string {
   if (tool.cli?.command !== undefined) return commandWord(tool.name, tool.cli.command);
   const separator = tool.name.indexOf("_");
-  return (separator === -1 ? tool.name : tool.name.slice(separator + 1)).replaceAll("_", "-");
+  const derived = separator === -1 ? tool.name : tool.name.slice(separator + 1);
+  // `pkg__h` would derive `-h` and `pkg_` nothing; neither can be dispatched.
+  return commandWord(tool.name, derived.replaceAll("_", "-"));
 }
 
 /** A command word citty can dispatch to: not empty, not an option, nothing that forges a line. */
