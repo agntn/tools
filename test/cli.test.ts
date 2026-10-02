@@ -369,6 +369,31 @@ describe("CLI definitions", () => {
     expect(build(make({ first: false, second: true }, ["second", "first"]))).not.toThrow();
   });
 
+  it("rejects a boolean flag starting with no-", () => {
+    const negative = defineTool({
+      name: "demo_negative",
+      title: "Negative",
+      description: "x",
+      effect: "read",
+      input: Type.Object(
+        { noCache: Type.Optional(Type.Boolean()) },
+        { additionalProperties: false },
+      ),
+      execute: () => ({ content: [], details: null }),
+    });
+    expect(() =>
+      createCli({ ...options, tools: [negative], default: undefined, fallback: undefined }),
+    ).toThrow(/boolean property noCache cannot take a flag starting with no-/);
+  });
+
+  it("takes -h only as a whole word and sanitizes --version", async () => {
+    expect((await run(["echo", "hi", "-xh"])).stderr).toBe(
+      'Invalid arguments: unknown option "-xh"; takes --mode, --times, --spaced, --json\n',
+    );
+    const forged = `1.0${String.fromCodePoint(10)}FAKE${String.fromCodePoint(0x1b)}[31m`;
+    expect((await run(["--version"], { ...options, version: forged })).stdout).toBe("1.0 FAKE\n");
+  });
+
   it("sanitizes the usage text", async () => {
     const loud = defineTool({
       ...echo,

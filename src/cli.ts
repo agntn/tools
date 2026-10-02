@@ -182,13 +182,18 @@ function toolFields(tool: ToolDefinition): Field[] {
 /**
  * @param tool - Tool the field belongs to.
  * @param field - Field to check.
- * @param taken - Whether a field before it has the same flag.
- * @throws {ToolDefinitionError} When no word can spell the flag, it is reserved or taken, or a hint does not fit the field.
+ * @throws {ToolDefinitionError} When no word can spell the flag, or it is reserved or reads as a negation.
  */
-function assertField(tool: ToolDefinition, field: Field, taken: boolean): void {
+function assertFlag(tool: ToolDefinition, field: Field): void {
   if (!FLAG_WORD.test(field.flag)) {
     throw new ToolDefinitionError(
       `${tool.name}: property ${JSON.stringify(field.key)} gives the flag ${JSON.stringify(field.flag)}, which must match ${FLAG_WORD}`,
+    );
+  }
+  if (field.kind === "boolean" && field.flag.startsWith("no-")) {
+    // `util.parseArgs` reads `--no-cache` as `cache` negated, never as a flag `no-cache`.
+    throw new ToolDefinitionError(
+      `${tool.name}: boolean property ${field.key} cannot take a flag starting with no-; name the positive and --no-${field.flag.slice(3)} negates it`,
     );
   }
   if (RESERVED_FLAGS.has(field.flag)) {
@@ -196,6 +201,16 @@ function assertField(tool: ToolDefinition, field: Field, taken: boolean): void {
       `${tool.name}: property ${field.key} takes the reserved flag --${field.flag}`,
     );
   }
+}
+
+/**
+ * @param tool - Tool the field belongs to.
+ * @param field - Field to check.
+ * @param taken - Whether a field before it has the same flag.
+ * @throws {ToolDefinitionError} When no word can spell the flag, it is reserved or taken, or a hint does not fit the field.
+ */
+function assertField(tool: ToolDefinition, field: Field, taken: boolean): void {
+  assertFlag(tool, field);
   if (taken) {
     throw new ToolDefinitionError(`${tool.name}: two properties take the flag --${field.flag}`);
   }
@@ -394,14 +409,17 @@ type OptionRead =
 /**
  * @param options - Option fields by flag.
  * @param token - The token `util.parseArgs` made.
+ * @param word - The command line word it came from.
  * @returns {Field | "json" | "help" | undefined} What the token names under a spelling it takes.
  */
 function optionField(
   options: Readonly<Record<string, Field>>,
   token: OptionToken,
+  word: string,
 ): Field | "json" | "help" | undefined {
   if (token.rawName === "--json") return "json";
-  if (token.rawName === "--help" || token.rawName === "-h") return "help";
+  // `-xh` expands to `-x` and `-h`; only the whole word `-h` asks for help.
+  if (token.rawName === "--help" || word === "-h") return "help";
   const field = Object.hasOwn(options, token.name) ? options[token.name] : undefined;
   if (field === undefined || token.rawName === `--${token.name}`) return field;
   return token.rawName === `--no-${token.name}` && field.kind === "boolean" ? field : undefined;
@@ -420,7 +438,7 @@ function readOption(
   word: string,
   seen: readonly string[],
 ): OptionRead {
-  const field = optionField(options, token);
+  const field = optionField(options, token, word);
   if (field === undefined) {
     const takes = [...Object.keys(options), "json"].map((flag) => `--${flag}`).join(", ");
     return { error: `Invalid arguments: unknown option ${JSON.stringify(word)}; takes ${takes}` };
@@ -761,7 +779,7 @@ async function dispatch(
 ): Promise<void> {
   const [first, ...rest] = argv;
   if (argv.length === 1 && (first === "--version" || first === "-v")) {
-    writeLine("stdout", options.version);
+    writeLine("stdout", sanitizeLine(options.version));
   } else if (first === "--help" || first === "-h") {
     writeLine("stdout", sanitizeText(mainUsage(options, commands)));
   } else if (first === undefined) {
