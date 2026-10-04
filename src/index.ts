@@ -273,9 +273,10 @@ export type InputCheck<Input extends TObject> =
  *
  * Runs on every surface, not only MCP: a host may skip its own validation, and
  * OMP's omptype drops `pattern` from the schema it emits. The message has one
- * line per failure: an undeclared key names itself with the keys the tool
- * takes, and an enum failure names the allowed values, so the caller does not
- * go back to the tool list and guess. Format from agntn/hashes (#58).
+ * line per failure: an undeclared key names itself with the keys its object
+ * takes, at any depth, and an enum failure names the allowed values, so the
+ * caller does not go back to the tool list and guess. Format from agntn/hashes
+ * (#58). TypeBox stops at eight errors, so root keys are read off the arguments.
  *
  * @param tool - Tool whose schema applies.
  * @param args - Arguments as received from the host.
@@ -287,36 +288,145 @@ export function validateInput<Input extends TObject>(
 ): InputCheck<Input> {
   if (Value.Check(tool.input, args)) return { ok: true, value: args };
 
-  const declared = Object.keys(tool.input.properties);
-  const unknownKeys =
+  const schema = wireSchema(tool);
+  const rootKeys =
     args !== null && typeof args === "object" && !Array.isArray(args)
-      ? Object.keys(args).filter((key) => !declared.includes(key))
+      ? Object.keys(args).filter((key) => !Object.hasOwn(tool.input.properties, key))
       : [];
-  // A closed schema reports each undeclared key again, as `schema is false` at its path.
-  const reported = new Set(
-    unknownKeys.map((key) => `/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`),
-  );
-  const lines = [
-    ...unknownKeys.map(
-      (key) =>
-        `Invalid arguments: unknown property ${JSON.stringify(key)}; takes ${declared.join(", ")}`,
-    ),
-    ...Value.Errors(tool.input, args)
-      .filter(
-        (error) => error.keyword !== "additionalProperties" && !reported.has(error.instancePath),
-      )
-      .map((error) => {
-        const allowed =
-          error.keyword === "enum"
-            ? (error.params as { allowedValues?: unknown }).allowedValues
-            : undefined;
-        const message = Array.isArray(allowed)
-          ? `must be one of ${allowed.join(", ")}`
-          : error.message;
-        return `Invalid arguments at ${error.instancePath || "/"}: ${message}`;
-      }),
-  ];
+  const unknown = rootKeys.map((key) => unknownKeyLine("", key, [schema]));
+  const other: string[] = [];
+  for (const error of Value.Errors(tool.input, args)) {
+    if (error.keyword === "additionalProperties") continue;
+    const refused = refusedKeyLines(schema, error.instancePath, error.schemaPath);
+    if (refused === undefined)
+      other.push(errorLine(error.instancePath, error.message, error.params));
+    else unknown.push(...refused);
+  }
+  const lines = [...unknown, ...other];
   return { ok: false, lines: lines.length > 0 ? [...new Set(lines)] : ["Invalid arguments"] };
+}
+
+/**
+ * @param at - JSON pointer of the failing value.
+ * @param message - TypeBox's message.
+ * @param params - TypeBox's parameters of the failure.
+ * @returns {string} The line, with the allowed values when an enum failed.
+ */
+function errorLine(at: string, message: string, params: unknown): string {
+  const allowed = isNode(params) ? params.allowedValues : undefined;
+  const text = Array.isArray(allowed) ? `must be one of ${allowed.join(", ")}` : message;
+  return `Invalid arguments at ${at || "/"}: ${text}`;
+}
+
+/**
+ * A closed object refuses each extra key as `schema is false`, which names nothing on its own.
+ *
+ * @param root - Tool input schema.
+ * @param at - JSON pointer of the failing value.
+ * @param schemaPath - Schema path of the failure.
+ * @returns {string[] | undefined} The line, none when another union branch takes the key, or
+ *   `undefined` for any other failure.
+ */
+function refusedKeyLines(root: SchemaNode, at: string, schemaPath: string): string[] | undefined {
+  const suffix = "/additionalProperties";
+  if (!schemaPath.endsWith(suffix)) return undefined;
+  const objectPath = schemaPath.slice(0, -suffix.length);
+  const node = schemaAt(root, objectPath);
+  if (node?.additionalProperties !== false) return undefined;
+  const cut = at.lastIndexOf("/");
+  const key = unescapeToken(at.slice(cut + 1));
+  const alternatives = alternativesAt(root, objectPath);
+  if (alternatives.some((alternative) => takesKey(alternative, key))) return [];
+  return [unknownKeyLine(at.slice(0, cut), key, alternatives)];
+}
+
+/**
+ * Each union branch fails on its own, so the same object in another branch may take the key.
+ *
+ * @param root - Tool input schema.
+ * @param pointer - Schema path of a closed object.
+ * @returns {SchemaNode[]} That object as every branch of every enclosing union has it.
+ */
+function alternativesAt(root: SchemaNode, pointer: string): SchemaNode[] {
+  let nodes: unknown[] = [root];
+  let previous = "";
+  for (const token of pointer.split("/").slice(1)) {
+    const key = unescapeToken(token);
+    const everyBranch = previous === "anyOf" && /^\d+$/.test(key);
+    nodes = nodes.flatMap((node): unknown[] => {
+      if (everyBranch && Array.isArray(node)) return node;
+      return isNode(node) && Object.hasOwn(node, key) ? [node[key]] : [];
+    });
+    previous = key;
+  }
+  return nodes.filter(isNode);
+}
+
+/**
+ * @param token - One JSON pointer segment.
+ * @returns {string} The property name it encodes.
+ */
+function unescapeToken(token: string): string {
+  return token.replaceAll("~1", "/").replaceAll("~0", "~");
+}
+
+/**
+ * @param node - Schema node.
+ * @param key - Property name.
+ * @returns {boolean} Whether an object of this schema accepts the key.
+ */
+function takesKey(node: SchemaNode, key: string): boolean {
+  if (node.type !== "object") return false;
+  if (node.additionalProperties !== false) return true;
+  if (isNode(node.properties) && Object.hasOwn(node.properties, key)) return true;
+  return patternsOf(node).some((pattern) => new RegExp(pattern, "u").test(key));
+}
+
+/**
+ * @param node - Schema node.
+ * @returns {string[]} Its `patternProperties` patterns.
+ */
+function patternsOf(node: SchemaNode): string[] {
+  return Object.keys(isNode(node.patternProperties) ? node.patternProperties : {});
+}
+
+/**
+ * @param at - JSON pointer of the object, empty at the root.
+ * @param key - The undeclared key.
+ * @param objects - Schema of that object, once per union branch it sits in.
+ * @returns {string} The key with what the object takes, and the object's path when it is nested.
+ */
+function unknownKeyLine(at: string, key: string, objects: readonly SchemaNode[]): string {
+  const lists = [
+    ...new Set(
+      objects
+        .filter((object) => object.type === "object")
+        .map((object) =>
+          [
+            ...Object.keys(isNode(object.properties) ? object.properties : {}),
+            ...patternsOf(object).map((pattern) => `keys matching ${JSON.stringify(pattern)}`),
+          ].join(", "),
+        ),
+    ),
+  ];
+  const takes = lists.length > 1 ? lists.map((list) => `{${list}}`).join(" or ") : lists[0];
+  const where = at === "" ? "" : ` at ${at}`;
+  const what = takes || "no properties";
+  return `Invalid arguments${where}: unknown property ${JSON.stringify(key)}; takes ${what}`;
+}
+
+/**
+ * @param root - Tool input schema.
+ * @param pointer - Schema path from a validation error, such as `#/properties/point`.
+ * @returns {SchemaNode | undefined} The subschema it points at.
+ */
+function schemaAt(root: SchemaNode, pointer: string): SchemaNode | undefined {
+  let node: unknown = root;
+  for (const token of pointer.split("/").slice(1)) {
+    const key = unescapeToken(token);
+    node = isNode(node) && Object.hasOwn(node, key) ? node[key] : undefined;
+  }
+  return isNode(node) ? node : undefined;
 }
 
 /**
