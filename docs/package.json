@@ -14,7 +14,7 @@
     "@modelcontextprotocol/sdk": "1.31.0",
     "@modelcontextprotocol/server": "2.2.0",
     "agents": "0.24.0",
-    "ai": "7.0.126",
+    "ai": "7.0.127",
     "better-sqlite3": "12.11.1",
     "docus": "5.13.0",
     "nuxt": "4.5.2",
