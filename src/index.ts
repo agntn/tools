@@ -73,7 +73,7 @@ export interface ToolCallContext {
 export interface ToolDefinition<Input extends TObject = TObject, Details = unknown> {
   /** Wire name, `<package>_<operation>`. */
   readonly name: string;
-  /** Human label: MCP `title`, Pi and OMP `label`. */
+  /** Human label: MCP `title` and `annotations.title`, Pi and OMP `label`. */
   readonly title: string;
   /** Complete instruction for the model. MCP clients see nothing else. */
   readonly description: string;
