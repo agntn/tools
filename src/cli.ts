@@ -9,10 +9,11 @@
  */
 
 import { readFileSync } from "node:fs";
-import { parseArgs, stripVTControlCharacters } from "node:util";
+import { parseArgs } from "node:util";
 
 import { Value } from "typebox/value";
 
+import { stripEscapes } from "./escapes.ts";
 import {
   indexTools,
   invokeTool,
@@ -570,7 +571,7 @@ const FORGING =
  * @returns {string} The text without escape sequences or other control characters.
  */
 function sanitizeText(text: string): string {
-  return stripVTControlCharacters(text.replaceAll(/\r\n?/g, "\n"))
+  return stripEscapes(text.replaceAll(/\r\n?/g, "\n"))
     .replaceAll(FORGING, "")
     .replaceAll(/[\u2028\u2029]/g, " ");
 }

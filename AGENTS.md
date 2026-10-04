@@ -40,6 +40,7 @@
 - **`default` and `fallback`**: an empty line runs `default`, and a first word that names no command or alias goes to `fallback` as its first argument. A leading option such as `--help` stays at the root, and a lone `-` goes to the fallback as its stdin word. Every name and alias is known without loading anything, since package commands are definitions; the earlier citty version loaded lazy package commands on every fallback call to read their aliases.
 - **CLI output**: the text follows the multi-line policy (quality, anti-recidivism pattern 9): CR and CRLF become LF, escape sequences go, C0/C1 but tab and LF and the bidi marks (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+206F) are removed, U+2028 and U+2029 become a space, ZWJ and ZWNJ stay; `--json` (tool commands only; `mcp` has no details and rejects it) prints `details` with DEL, C1, the bidi marks and U+2028/U+2029 escaped as `\uXXXX`, so the parsed details stay the same; a returned `isError` goes to stderr with exit code 1. `json`, `help` and `version` are reserved flags. `EPIPE` as in hashes: a closed pipe ends the process with the exit code the command set.
 - Terminal and error text go through `sanitizeLine`: `stripVTControlCharacters` first (the family convention), then `Cc`, `Cf`, `Zl`, `Zp` to spaces.
+- **Escapes strip in linear time** (`src/escapes.ts`, #10): Node's pattern runs from every unclosed `ESC ]` to the end of the text, so `"\u001B]".repeat(32_000)` took 1 s in `sanitizeLine` and in `stripVTControlCharacters` alike. `stripEscapes` keeps the pattern but cuts the text after the last terminator (BEL, `ESC \`, U+009C), where no OSC can close, and runs the tail without the OSC branch; the CLI's `sanitizeText` uses it in place of `node:util`. The test compares it with `stripVTControlCharacters` on every string of up to five escape pieces.
 
 ## Stack
 
@@ -51,6 +52,7 @@ Node.js >= 24, TypeScript (strict), pnpm.
 
 ```
 src/index.ts  - core: defineTool, Type, validateInput, invokeTool, sanitizeLine
+src/escapes.ts - stripEscapes, Node's escape pattern in linear time (core and CLI)
 src/mcp.ts    - createMcpServer
 src/pi.ts     - registerPiTools
 src/omp.ts    - registerOmpTools

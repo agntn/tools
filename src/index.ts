@@ -27,6 +27,8 @@ export type * from "typebox";
 
 import { Value } from "typebox/value";
 
+import { stripEscapes } from "./escapes.ts";
+
 /** Content block understood by MCP, Pi and OMP alike. */
 export type ToolContent =
   | { type: "text"; text: string }
@@ -451,14 +453,6 @@ export async function invokeTool(
 const LINE_BREAKING = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
 /**
- * Terminal escape sequences, the pattern Node 26 uses in `stripVTControlCharacters`.
- * Kept here rather than imported from `node:util` so the core runs in a browser or a worker.
- */
-const ESCAPE_SEQUENCE =
-  /* oxlint-disable-next-line no-control-regex */
-  /(?:\u001B\][\s\S]*?(?:\u0007|\u001B\u005C|\u009C))|[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]/g;
-
-/**
  * Makes a value safe for one line of terminal or protocol text.
  *
  * Removes escape sequences, then replaces every control, format, line and
@@ -470,8 +464,7 @@ const ESCAPE_SEQUENCE =
  * @returns {string} Single-line text.
  */
 export function sanitizeLine(value: unknown): string {
-  return String(value)
-    .replaceAll(ESCAPE_SEQUENCE, "")
+  return stripEscapes(String(value))
     .replaceAll(LINE_BREAKING, " ")
     .replaceAll(/ {2,}/g, " ")
     .trim();

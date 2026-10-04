@@ -1,10 +1,12 @@
 import { readFileSync } from "node:fs";
+import { stripVTControlCharacters } from "node:util";
 
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { asSchema } from "ai";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { toAiTool, toAiTools } from "../src/ai.ts";
+import { stripEscapes } from "../src/escapes.ts";
 import {
   defineTool,
   indexTools,
@@ -256,10 +258,13 @@ describe("validateInput", () => {
 });
 
 describe("portability", () => {
-  it.each(["index.ts", "pi.ts", "omp.ts", "ai.ts"])("keeps node:* out of src/%s", (file) => {
-    const source = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
-    expect(source).not.toMatch(/from "node:/);
-  });
+  it.each(["index.ts", "escapes.ts", "pi.ts", "omp.ts", "ai.ts"])(
+    "keeps node:* out of src/%s",
+    (file) => {
+      const source = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+      expect(source).not.toMatch(/from "node:/);
+    },
+  );
 });
 
 describe("sanitizeLine", () => {
@@ -268,7 +273,33 @@ describe("sanitizeLine", () => {
     expect(sanitizeLine(hostile)).toBe("abc d e f gh");
     expect(sanitizeLine(42)).toBe("42");
   });
+
+  it("strips escapes exactly as node:util does", () => {
+    const mismatches = strings(5).filter(
+      (text) => stripEscapes(text) !== stripVTControlCharacters(text),
+    );
+    expect(mismatches).toEqual([]);
+  });
+
+  it("stays linear on a run of unclosed OSC introducers", () => {
+    const start = performance.now();
+    const line = sanitizeLine("\u001B]".repeat(100_000));
+    expect(performance.now() - start).toBeLessThan(1000);
+    expect(line).toBe(Array.from({ length: 100_000 }, () => "]").join(" "));
+  });
 });
+
+/* Every string of up to `length` characters from the pieces escape sequences are made of. */
+function strings(length: number): string[] {
+  const alphabet = ["\u001B", "]", "\u0007", "\\", "\u009C", "\u009B", "[", "1", ";", "m"];
+  let level = [""];
+  const all = [""];
+  for (let size = 0; size < length; size++) {
+    level = level.flatMap((prefix) => alphabet.map((piece) => prefix + piece));
+    for (const text of level) all.push(text);
+  }
+  return all;
+}
 
 const open: Array<{ close(): Promise<void> }> = [];
 afterEach(async () => {
