@@ -2,7 +2,7 @@
  * Terminal escape sequences, the pattern Node 26 uses in `stripVTControlCharacters`.
  * Kept here rather than imported from `node:util` so the core runs in a browser or a worker.
  */
-const ESCAPE_SEQUENCE =
+export const ESCAPE_SEQUENCE =
   /* oxlint-disable-next-line no-control-regex */
   /(?:\u001B\][\s\S]*?(?:\u0007|\u001B\u005C|\u009C))|[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]/g;
 
@@ -22,8 +22,8 @@ function afterLast(text: string, token: string): number {
 }
 
 /**
- * `stripVTControlCharacters` to the letter, minus the quadratic walk: no OSC closes past the last
- * terminator, so that tail skips the branch that rescanned it from every `ESC ]`.
+ * Node 26's `stripVTControlCharacters` to the letter, minus the quadratic walk: no OSC closes past
+ * the last terminator, so that tail skips the branch that rescanned it from every `ESC ]`.
  *
  * @param text - Text to clean.
  * @returns {string} The text without escape sequences.

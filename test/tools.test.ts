@@ -1,12 +1,11 @@
 import { readFileSync } from "node:fs";
-import { stripVTControlCharacters } from "node:util";
 
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { asSchema } from "ai";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { toAiTool, toAiTools } from "../src/ai.ts";
-import { stripEscapes } from "../src/escapes.ts";
+import { ESCAPE_SEQUENCE, stripEscapes } from "../src/escapes.ts";
 import {
   defineTool,
   indexTools,
@@ -274,9 +273,9 @@ describe("sanitizeLine", () => {
     expect(sanitizeLine(42)).toBe("42");
   });
 
-  it("strips escapes exactly as node:util does", () => {
+  it("strips escapes exactly as the whole pattern does", () => {
     const mismatches = strings(5).filter(
-      (text) => stripEscapes(text) !== stripVTControlCharacters(text),
+      (text) => stripEscapes(text) !== text.replaceAll(ESCAPE_SEQUENCE, ""),
     );
     expect(mismatches).toEqual([]);
   });
