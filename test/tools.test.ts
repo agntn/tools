@@ -172,6 +172,38 @@ describe("validateInput", () => {
     ]);
   });
 
+  it("leaves a key alone when another union branch takes it", () => {
+    const shape = defineTool({
+      name: "demo_shape",
+      title: "Shape",
+      description: "Draw a shape.",
+      effect: "read",
+      input: Type.Object(
+        {
+          shape: Type.Union([
+            Type.Object(
+              { kind: Type.Literal("circle"), radius: Type.Number() },
+              { additionalProperties: false },
+            ),
+            Type.Object(
+              { kind: Type.Literal("square"), side: Type.Number() },
+              { additionalProperties: false },
+            ),
+          ]),
+        },
+        { additionalProperties: false },
+      ),
+      execute: () => ({ content: [], details: null }),
+    });
+    const checked = validateInput(shape, { shape: { kind: "circle", radius: 1, extra: 1 } });
+    const lines = checked.ok ? [] : checked.lines;
+
+    expect(lines).toContain(
+      'Invalid arguments at /shape: unknown property "extra"; takes {kind, radius} or {kind, side}',
+    );
+    expect(lines.filter((line) => line.includes("unknown property"))).toHaveLength(1);
+  });
+
   it("names every unknown root key past TypeBox's cap of eight errors", () => {
     const keys = Array.from({ length: 10 }, (_, i) => `k${i}`);
     const checked = validateInput(echo, {

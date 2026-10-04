@@ -293,13 +293,14 @@ export function validateInput<Input extends TObject>(
     args !== null && typeof args === "object" && !Array.isArray(args)
       ? Object.keys(args).filter((key) => !Object.hasOwn(tool.input.properties, key))
       : [];
-  const unknown = rootKeys.map((key) => unknownKeyLine("", key, schema));
+  const unknown = rootKeys.map((key) => unknownKeyLine("", key, [schema]));
   const other: string[] = [];
   for (const error of Value.Errors(tool.input, args)) {
     if (error.keyword === "additionalProperties") continue;
-    const line = refusedKeyLine(schema, error.instancePath, error.schemaPath);
-    if (line === undefined) other.push(errorLine(error.instancePath, error.message, error.params));
-    else unknown.push(line);
+    const refused = refusedKeyLines(schema, error.instancePath, error.schemaPath);
+    if (refused === undefined)
+      other.push(errorLine(error.instancePath, error.message, error.params));
+    else unknown.push(...refused);
   }
   const lines = [...unknown, ...other];
   return { ok: false, lines: lines.length > 0 ? [...new Set(lines)] : ["Invalid arguments"] };
@@ -323,36 +324,77 @@ function errorLine(at: string, message: string, params: unknown): string {
  * @param root - Tool input schema.
  * @param at - JSON pointer of the failing value.
  * @param schemaPath - Schema path of the failure.
- * @returns {string | undefined} The line, or `undefined` for any other failure.
+ * @returns {string[] | undefined} The line, none when another union branch takes the key, or
+ *   `undefined` for any other failure.
  */
-function refusedKeyLine(root: SchemaNode, at: string, schemaPath: string): string | undefined {
+function refusedKeyLines(root: SchemaNode, at: string, schemaPath: string): string[] | undefined {
   const suffix = "/additionalProperties";
   if (!schemaPath.endsWith(suffix)) return undefined;
-  const node = schemaAt(root, schemaPath.slice(0, -suffix.length));
+  const objectPath = schemaPath.slice(0, -suffix.length);
+  const node = schemaAt(root, objectPath);
   if (node?.additionalProperties !== false) return undefined;
   const cut = at.lastIndexOf("/");
   const key = at
     .slice(cut + 1)
     .replaceAll("~1", "/")
     .replaceAll("~0", "~");
-  return unknownKeyLine(at.slice(0, cut), key, node);
+  const branches = unionBranches(root, objectPath) ?? [node];
+  if (branches.some((branch) => takesKey(branch, key))) return [];
+  return [unknownKeyLine(at.slice(0, cut), key, branches)];
+}
+
+/**
+ * Every branch fails on its own, so a key one branch refuses can be the one the caller meant.
+ *
+ * @param root - Tool input schema.
+ * @param objectPath - Schema path of a closed object.
+ * @returns {SchemaNode[] | undefined} The branches of the union the object is a branch of.
+ */
+function unionBranches(root: SchemaNode, objectPath: string): SchemaNode[] | undefined {
+  const branch = /\/anyOf\/\d+$/.exec(objectPath);
+  const union = branch ? schemaAt(root, objectPath.slice(0, branch.index)) : undefined;
+  return Array.isArray(union?.anyOf) ? union.anyOf.filter(isNode) : undefined;
+}
+
+/**
+ * @param node - Schema node.
+ * @param key - Property name.
+ * @returns {boolean} Whether an object of this schema accepts the key.
+ */
+function takesKey(node: SchemaNode, key: string): boolean {
+  if (node.type !== "object") return false;
+  if (node.additionalProperties !== false) return true;
+  if (isNode(node.properties) && Object.hasOwn(node.properties, key)) return true;
+  return patternsOf(node).some((pattern) => new RegExp(pattern, "u").test(key));
+}
+
+/**
+ * @param node - Schema node.
+ * @returns {string[]} Its `patternProperties` patterns.
+ */
+function patternsOf(node: SchemaNode): string[] {
+  return Object.keys(isNode(node.patternProperties) ? node.patternProperties : {});
 }
 
 /**
  * @param at - JSON pointer of the object, empty at the root.
  * @param key - The undeclared key.
- * @param node - Schema of that object.
+ * @param branches - Schema of that object, or of every branch of its union.
  * @returns {string} The key with what the object takes, and the object's path when it is nested.
  */
-function unknownKeyLine(at: string, key: string, node: SchemaNode): string {
-  const patterns = Object.keys(isNode(node.patternProperties) ? node.patternProperties : {});
-  const takes = [
-    ...Object.keys(isNode(node.properties) ? node.properties : {}),
-    ...patterns.map((pattern) => `keys matching ${JSON.stringify(pattern)}`),
-  ];
+function unknownKeyLine(at: string, key: string, branches: readonly SchemaNode[]): string {
+  const lists = branches
+    .filter((branch) => branch.type === "object")
+    .map((branch) =>
+      [
+        ...Object.keys(isNode(branch.properties) ? branch.properties : {}),
+        ...patternsOf(branch).map((pattern) => `keys matching ${JSON.stringify(pattern)}`),
+      ].join(", "),
+    );
+  const takes = lists.length > 1 ? lists.map((list) => `{${list}}`).join(" or ") : lists[0];
   const where = at === "" ? "" : ` at ${at}`;
-  const list = takes.join(", ") || "no properties";
-  return `Invalid arguments${where}: unknown property ${JSON.stringify(key)}; takes ${list}`;
+  const what = takes || "no properties";
+  return `Invalid arguments${where}: unknown property ${JSON.stringify(key)}; takes ${what}`;
 }
 
 /**
