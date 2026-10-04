@@ -25,13 +25,14 @@ export interface McpServerInfo {
 }
 
 /**
- * Maps a tool's declared effect to MCP annotations.
+ * Maps a tool's title and declared effect to MCP annotations. Claude Code reads its label here.
  *
  * @param tool - Tool to describe.
- * @returns {ToolAnnotations} Hints for the MCP client.
+ * @returns {ToolAnnotations} Title and hints for the MCP client.
  */
 export function toolAnnotations(tool: ToolDefinition): ToolAnnotations {
   return {
+    title: tool.title,
     readOnlyHint: tool.effect === "read",
     destructiveHint: tool.effect === "destructive",
     idempotentHint: tool.idempotent ?? tool.effect === "read",

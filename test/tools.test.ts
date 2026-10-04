@@ -285,12 +285,14 @@ async function mcpClient(): Promise<Client> {
 }
 
 describe("MCP adapter", () => {
-  it("lists the schema verbatim with annotations from the effect", async () => {
+  it("lists the schema verbatim with the title and annotations from the effect", async () => {
     const client = await mcpClient();
     const [tool] = (await client.listTools()).tools;
 
     expect(tool?.inputSchema).toEqual(JSON.parse(JSON.stringify(echo.input)));
+    expect(tool?.title).toBe(echo.title);
     expect(tool?.annotations).toEqual({
+      title: echo.title,
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true,
