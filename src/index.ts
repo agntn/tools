@@ -334,26 +334,40 @@ function refusedKeyLines(root: SchemaNode, at: string, schemaPath: string): stri
   const node = schemaAt(root, objectPath);
   if (node?.additionalProperties !== false) return undefined;
   const cut = at.lastIndexOf("/");
-  const key = at
-    .slice(cut + 1)
-    .replaceAll("~1", "/")
-    .replaceAll("~0", "~");
-  const branches = unionBranches(root, objectPath) ?? [node];
-  if (branches.some((branch) => takesKey(branch, key))) return [];
-  return [unknownKeyLine(at.slice(0, cut), key, branches)];
+  const key = unescapeToken(at.slice(cut + 1));
+  const alternatives = alternativesAt(root, objectPath);
+  if (alternatives.some((alternative) => takesKey(alternative, key))) return [];
+  return [unknownKeyLine(at.slice(0, cut), key, alternatives)];
 }
 
 /**
- * Every branch fails on its own, so a key one branch refuses can be the one the caller meant.
+ * Each union branch fails on its own, so the same object in another branch may take the key.
  *
  * @param root - Tool input schema.
- * @param objectPath - Schema path of a closed object.
- * @returns {SchemaNode[] | undefined} The branches of the union the object is a branch of.
+ * @param pointer - Schema path of a closed object.
+ * @returns {SchemaNode[]} That object as every branch of every enclosing union has it.
  */
-function unionBranches(root: SchemaNode, objectPath: string): SchemaNode[] | undefined {
-  const branch = /\/anyOf\/\d+$/.exec(objectPath);
-  const union = branch ? schemaAt(root, objectPath.slice(0, branch.index)) : undefined;
-  return Array.isArray(union?.anyOf) ? union.anyOf.filter(isNode) : undefined;
+function alternativesAt(root: SchemaNode, pointer: string): SchemaNode[] {
+  let nodes: unknown[] = [root];
+  let previous = "";
+  for (const token of pointer.split("/").slice(1)) {
+    const key = unescapeToken(token);
+    const everyBranch = previous === "anyOf" && /^\d+$/.test(key);
+    nodes = nodes.flatMap((node): unknown[] => {
+      if (everyBranch && Array.isArray(node)) return node;
+      return isNode(node) && Object.hasOwn(node, key) ? [node[key]] : [];
+    });
+    previous = key;
+  }
+  return nodes.filter(isNode);
+}
+
+/**
+ * @param token - One JSON pointer segment.
+ * @returns {string} The property name it encodes.
+ */
+function unescapeToken(token: string): string {
+  return token.replaceAll("~1", "/").replaceAll("~0", "~");
 }
 
 /**
@@ -379,18 +393,22 @@ function patternsOf(node: SchemaNode): string[] {
 /**
  * @param at - JSON pointer of the object, empty at the root.
  * @param key - The undeclared key.
- * @param branches - Schema of that object, or of every branch of its union.
+ * @param objects - Schema of that object, once per union branch it sits in.
  * @returns {string} The key with what the object takes, and the object's path when it is nested.
  */
-function unknownKeyLine(at: string, key: string, branches: readonly SchemaNode[]): string {
-  const lists = branches
-    .filter((branch) => branch.type === "object")
-    .map((branch) =>
-      [
-        ...Object.keys(isNode(branch.properties) ? branch.properties : {}),
-        ...patternsOf(branch).map((pattern) => `keys matching ${JSON.stringify(pattern)}`),
-      ].join(", "),
-    );
+function unknownKeyLine(at: string, key: string, objects: readonly SchemaNode[]): string {
+  const lists = [
+    ...new Set(
+      objects
+        .filter((object) => object.type === "object")
+        .map((object) =>
+          [
+            ...Object.keys(isNode(object.properties) ? object.properties : {}),
+            ...patternsOf(object).map((pattern) => `keys matching ${JSON.stringify(pattern)}`),
+          ].join(", "),
+        ),
+    ),
+  ];
   const takes = lists.length > 1 ? lists.map((list) => `{${list}}`).join(" or ") : lists[0];
   const where = at === "" ? "" : ` at ${at}`;
   const what = takes || "no properties";
@@ -405,7 +423,7 @@ function unknownKeyLine(at: string, key: string, branches: readonly SchemaNode[]
 function schemaAt(root: SchemaNode, pointer: string): SchemaNode | undefined {
   let node: unknown = root;
   for (const token of pointer.split("/").slice(1)) {
-    const key = token.replaceAll("~1", "/").replaceAll("~0", "~");
+    const key = unescapeToken(token);
     node = isNode(node) && Object.hasOwn(node, key) ? node[key] : undefined;
   }
   return isNode(node) ? node : undefined;

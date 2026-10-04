@@ -204,6 +204,37 @@ describe("validateInput", () => {
     expect(lines.filter((line) => line.includes("unknown property"))).toHaveLength(1);
   });
 
+  it("checks a nested object against the same object in every union branch", () => {
+    const closed = { additionalProperties: false } as const;
+    const variant = defineTool({
+      name: "demo_variant",
+      title: "Variant",
+      description: "Pick a variant.",
+      effect: "read",
+      input: Type.Object(
+        {
+          v: Type.Union([
+            Type.Object(
+              { kind: Type.Literal("a"), options: Type.Object({ x: Type.Number() }, closed) },
+              closed,
+            ),
+            Type.Object(
+              { kind: Type.Literal("b"), options: Type.Object({ y: Type.Number() }, closed) },
+              closed,
+            ),
+          ]),
+        },
+        closed,
+      ),
+      execute: () => ({ content: [], details: null }),
+    });
+    const checked = validateInput(variant, { v: { kind: "a", options: { x: 1, z: 2 } } });
+
+    expect((checked.ok ? [] : checked.lines).filter((line) => line.includes("unknown"))).toEqual([
+      'Invalid arguments at /v/options: unknown property "z"; takes {x} or {y}',
+    ]);
+  });
+
   it("names every unknown root key past TypeBox's cap of eight errors", () => {
     const keys = Array.from({ length: 10 }, (_, i) => `k${i}`);
     const checked = validateInput(echo, {
