@@ -1,8 +1,6 @@
 # Changelog
 
-
 ## v0.1.0
-
 
 ### 🚀 Enhancements
 
@@ -55,4 +53,3 @@
 - Aeitwoen ([@aeitwoen](https://github.com/aeitwoen))
 - Ori ([@oritwoen](https://github.com/oritwoen))
 - Oritwoen ([@oritwoen](https://github.com/oritwoen))
-
