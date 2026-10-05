@@ -33,7 +33,12 @@ export default defineConfig({
               name: ["AgentToolResult", "ExtensionAPI", "Theme", "ToolRenderResultOptions"],
               package: "@oh-my-pi/pi-coding-agent",
             },
-            { from: "package", name: "ExtensionAPI", package: "@earendil-works/pi-coding-agent" },
+            {
+              from: "package",
+              name: ["ExtensionAPI", "ExtensionContext"],
+              package: "@earendil-works/pi-coding-agent",
+            },
+            { from: "lib", name: "AbortSignal" },
           ],
           ignoreInferredTypes: true,
         },

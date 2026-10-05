@@ -9,14 +9,18 @@
 import type {
   AgentToolResult,
   ExtensionAPI,
+  ExtensionContext,
   ToolDefinition as PiToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
+import { sanitizeText } from "./escapes.ts";
 import {
   invokeTool,
   resultText,
   sanitizeLine,
   ToolDefinitionError,
+  ToolInputError,
+  validateInput,
   type ToolDefinition,
 } from "./index.ts";
 
@@ -39,6 +43,19 @@ export interface PiToolOptions {
   readonly Text?: PiTextComponent;
   /** Renderers by tool name. */
   readonly renderers?: Readonly<Record<string, PiRenderers>>;
+  /** Questions to ask before a call runs, by tool name. A name off the tool list throws. */
+  readonly confirm?: Readonly<Record<string, PiConfirm>>;
+}
+
+/** Builds the question for one call from its validated input; `undefined` skips it. */
+export type PiConfirm = (
+  input: Readonly<Record<string, unknown>>,
+) => PiQuestion | undefined | Promise<PiQuestion | undefined>;
+
+/** What `ctx.ui.confirm` shows. The adapter sanitizes both and keeps the message's lines. */
+export interface PiQuestion {
+  readonly title: string;
+  readonly message: string;
 }
 
 /** Renderers for one tool: Pi's own, passed unchanged, or a one-line call summary. */
@@ -54,8 +71,9 @@ export interface PiRenderers extends Readonly<
  *
  * @param pi - Pi extension API.
  * @param tools - Tools to register.
- * @param options - Failure policy, host `Text` and renderers.
- * @throws {ToolDefinitionError} When a tool has `describeCall` but no `Text` came with it.
+ * @param options - Failure policy, host `Text`, renderers and questions.
+ * @throws {ToolDefinitionError} When a tool has `describeCall` but no `Text` came with it, or
+ *   `confirm` names a tool that isn't in the list.
  */
 export function registerPiTools(
   pi: ExtensionAPI,
@@ -63,11 +81,18 @@ export function registerPiTools(
   options: PiToolOptions = {},
 ): void {
   const failures = options.failures ?? "throw";
+  const stray = Object.keys(options.confirm ?? {}).find(
+    (name) => !tools.some((t) => t.name === name),
+  );
+  if (stray !== undefined) {
+    throw new ToolDefinitionError(
+      `confirm names ${JSON.stringify(stray)}, which isn't in the tool list`,
+    );
+  }
 
   for (const tool of tools) {
-    const renderers = Object.hasOwn(options.renderers ?? {}, tool.name)
-      ? options.renderers?.[tool.name]
-      : undefined;
+    const renderers = byName(options.renderers, tool.name);
+    const ask = byName(options.confirm, tool.name);
     pi.registerTool({
       ...hostRenderers(tool, renderers, options.Text),
       name: tool.name,
@@ -76,12 +101,67 @@ export function registerPiTools(
       ...(tool.snippet === undefined ? {} : { promptSnippet: tool.snippet }),
       ...(tool.guidelines === undefined ? {} : { promptGuidelines: [...tool.guidelines] }),
       parameters: tool.input,
-      async execute(_toolCallId, params, signal): Promise<AgentToolResult<unknown>> {
+      async execute(
+        _toolCallId,
+        params,
+        signal,
+        _onUpdate,
+        ctx,
+      ): Promise<AgentToolResult<unknown>> {
+        if (ask) await approve(tool, ask, params, signal, ctx);
         const result = await invokeTool(tool, params, signal ? { signal } : {});
         if (result.isError && failures === "throw") throw new Error(resultText(result));
         return result;
       },
     });
+  }
+}
+
+/**
+ * Own entry of a by-name option, so a tool named `constructor` doesn't reach the prototype.
+ *
+ * @param entries - Option keyed by tool name.
+ * @param name - Tool name.
+ * @returns {T | undefined} The entry, if the option has one for this tool.
+ */
+function byName<T>(entries: Readonly<Record<string, T>> | undefined, name: string): T | undefined {
+  return entries && Object.hasOwn(entries, name) ? entries[name] : undefined;
+}
+
+/**
+ * Asks the user about one call and throws unless they say yes.
+ *
+ * @param tool - Tool being called.
+ * @param ask - Its question builder.
+ * @param params - Arguments as Pi passes them.
+ * @param signal - The call's abort signal, which also dismisses the dialog.
+ * @param ctx - Pi context of the call.
+ * @returns {Promise<void>} Once the call may run.
+ * @throws {ToolInputError} When the arguments fail the schema, before anyone is asked.
+ * @throws {Error} Without a UI, on a "no", or with the reason of an abort.
+ */
+async function approve(
+  tool: ToolDefinition,
+  ask: PiConfirm,
+  params: unknown,
+  signal: AbortSignal | undefined,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const checked = validateInput(tool, params);
+  if (!checked.ok) throw new ToolInputError(checked.lines);
+  const question = await ask(checked.value);
+  if (question === undefined) return;
+  if (!ctx.hasUI) throw new Error(`${tool.name} needs interactive approval in Pi TUI or RPC mode`);
+  const approved = await ctx.ui.confirm(
+    sanitizeLine(question.title),
+    sanitizeText(question.message),
+    signal ? { signal } : {},
+  );
+  signal?.throwIfAborted();
+  if (!approved) {
+    throw new Error(
+      `${tool.name} was cancelled by the user. Do not retry unless the user asks again.`,
+    );
   }
 }
 
