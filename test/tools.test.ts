@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import type { ExtensionAPI, ToolDefinition as OmpToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { asSchema } from "ai";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
@@ -16,6 +17,7 @@ import {
   type ToolResult,
 } from "../src/index.ts";
 import { createMcpServer } from "../src/mcp.ts";
+import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 
 const echo = defineTool({
   name: "demo_echo",
@@ -427,5 +429,39 @@ describe("AI SDK adapter", () => {
     await expect(tool.execute({}, { toolCallId: "1", messages: [], context: {} })).rejects.toThrow(
       "details must not have a text field",
     );
+  });
+});
+
+describe("OMP adapter", () => {
+  /* What reaches `pi.registerTool` on a host double, one entry per tool. */
+  function register(loadMode?: "essential" | "discoverable"): OmpToolDefinition[] {
+    const registered: OmpToolDefinition[] = [];
+    const pi = {
+      typebox: { Type: { Unsafe: (document: unknown) => document } },
+      registerTool: (definition: OmpToolDefinition) => registered.push(definition),
+    };
+    class Text {
+      readonly text: string;
+      constructor(text: string) {
+        this.text = text;
+      }
+    }
+    registerOmpTools(pi as unknown as ExtensionAPI, [echo, { ...echo, name: "demo_echo_too" }], {
+      Text: Text as unknown as OmpToolOptions["Text"],
+      loadMode,
+    });
+    return registered;
+  }
+
+  it("leaves the load mode to OMP unless asked", () => {
+    expect(register().map((tool) => tool.loadMode)).toEqual([undefined, undefined]);
+  });
+
+  it("puts every tool in the load mode it is given", () => {
+    expect(register("essential").map((tool) => tool.loadMode)).toEqual(["essential", "essential"]);
+    expect(register("discoverable").map((tool) => tool.loadMode)).toEqual([
+      "discoverable",
+      "discoverable",
+    ]);
   });
 });

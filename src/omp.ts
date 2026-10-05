@@ -48,6 +48,8 @@ export interface OmpRenderers {
 export interface OmpToolOptions {
   /** The host `Text` component, imported by the extension from the package root. */
   readonly Text: TextComponent;
+  /** `"essential"` keeps every tool in OMP's top-level list. Left out, OMP hides them behind discovery. */
+  readonly loadMode?: OmpToolDefinition["loadMode"];
   /** Status-line renderers by tool name. */
   readonly renderers?: Readonly<Record<string, OmpRenderers>>;
 }
@@ -69,7 +71,7 @@ const APPROVAL: Record<ToolEffect, "read" | "write"> = {
  *
  * @param pi - OMP extension API.
  * @param tools - Tools to register.
- * @param options - Host `Text` and optional renderers.
+ * @param options - Host `Text`, optional load mode and renderers.
  */
 export function registerOmpTools(
   pi: ExtensionAPI,
@@ -90,6 +92,7 @@ export function registerOmpTools(
       description: tool.description,
       parameters: Type.Unsafe<Record<string, unknown>>(wireSchema(tool)),
       approval: APPROVAL[tool.effect],
+      loadMode: options.loadMode,
       async execute(_toolCallId, params, signal): Promise<AgentToolResult<unknown>> {
         // Returned as is: OMP reads `isError` from the object (`explicitError`).
         return await invokeTool(tool, params, signal ? { signal } : {});
