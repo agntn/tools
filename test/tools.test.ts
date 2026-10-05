@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import type {
+  ExtensionAPI as PiExtensionAPI,
+  Theme as PiTheme,
+  ToolDefinition as PiToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ToolDefinition as OmpToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { asSchema } from "ai";
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -18,6 +23,7 @@ import {
 } from "../src/index.ts";
 import { createMcpServer } from "../src/mcp.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
+import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
 
 const echo = defineTool({
   name: "demo_echo",
@@ -463,5 +469,87 @@ describe("OMP adapter", () => {
       "discoverable",
       "discoverable",
     ]);
+  });
+});
+
+describe("Pi adapter", () => {
+  class Text {
+    readonly text: string;
+    constructor(text: string) {
+      this.text = text;
+    }
+  }
+  /* Marks each style by name, so a test reads which colour a piece got. */
+  const theme = {
+    fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+    bold: (text: string) => `*${text}*`,
+  } as unknown as PiTheme;
+
+  /* What reaches `pi.registerTool` on a host double. */
+  function register(options: PiToolOptions): PiToolDefinition {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [echo], options);
+    const [definition] = registered;
+    if (!definition) throw new Error("nothing registered");
+    return definition;
+  }
+
+  /* The text of the call line Pi would draw for these arguments. */
+  function callLine(definition: PiToolDefinition, args: Readonly<Record<string, unknown>>): string {
+    const line = definition.renderCall?.(args, theme, {} as never);
+    if (!(line instanceof Text)) throw new Error("no call line");
+    return line.text;
+  }
+
+  const pass = Text as unknown as PiToolOptions["Text"];
+
+  it("draws the title and a sanitized describeCall summary", () => {
+    const definition = register({
+      Text: pass,
+      renderers: { demo_echo: { describeCall: (args) => `${String(args.word)}\nFAKE\u001B[31m` } },
+    });
+    expect(callLine(definition, { word: "hi" })).toBe(
+      "<toolTitle>*Demo Echo*</toolTitle> <muted>hi FAKE</muted>",
+    );
+  });
+
+  it("draws the title alone when the summary is empty", () => {
+    const definition = register({
+      Text: pass,
+      renderers: { demo_echo: { describeCall: () => "" } },
+    });
+    expect(callLine(definition, {})).toBe("<toolTitle>*Demo Echo*</toolTitle>");
+  });
+
+  it("lets a renderCall of the same tool win over describeCall", () => {
+    const own = new Text("own");
+    const definition = register({
+      Text: pass,
+      renderers: {
+        demo_echo: { describeCall: () => "summary", renderCall: () => own as never },
+      },
+    });
+    expect(definition.renderCall?.({}, theme, {} as never)).toBe(own);
+    expect(definition).not.toHaveProperty("describeCall");
+  });
+
+  it("keeps a renderResult next to describeCall", () => {
+    const renderResult = (): never => new Text("result") as never;
+    const definition = register({
+      Text: pass,
+      renderers: { demo_echo: { describeCall: () => "summary", renderResult } },
+    });
+    expect(definition.renderResult).toBe(renderResult);
+  });
+
+  it("refuses describeCall without the host Text", () => {
+    expect(() => register({ renderers: { demo_echo: { describeCall: () => "summary" } } })).toThrow(
+      new ToolDefinitionError("demo_echo: describeCall needs the host Text option"),
+    );
+  });
+
+  it("leaves the call line to Pi without renderers", () => {
+    expect(register({})).not.toHaveProperty("renderCall");
   });
 });
