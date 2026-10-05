@@ -49,3 +49,6 @@ peerDependencyRules:
     - vite
   allowedVersions:
     vite: "*"
+
+patchedDependencies:
+  rolldown-plugin-dts@0.28.6: patches/rolldown-plugin-dts@0.28.6.patch

@@ -49,9 +49,10 @@
     "lint": "vp lint && vp fmt --check",
     "lint:fix": "vp lint --fix && vp fmt",
     "typecheck": "tsc --noEmit --skipLibCheck",
+    "typecheck:dist": "tsc -p tsconfig.dist.json",
     "test": "vp test run",
     "test:watch": "vp test watch",
-    "release": "pnpm test && pnpm build && changelogen --release --push"
+    "release": "pnpm test && pnpm build && pnpm typecheck:dist && changelogen --release --push"
   },
   "devDependencies": {
     "@agntn/ox": "0.1.0",

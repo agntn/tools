@@ -1,0 +1,126 @@
+diff --git a/dist/index.mjs b/dist/index.mjs
+index cb3854eccb1c8208bdd18bde6d9026a6261dff61..30bf9c345f4df295a367581e9f48fe624003a676 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -477,6 +477,10 @@ function isThisExpression(node) {
+ function isInfer(node) {
+ 	return is.Identifier(node, "infer");
+ }
++const TYPE_PARAM_PREFIX = "_$tp$";
++function stripTypeParamPrefix(name) {
++	return name.startsWith(TYPE_PARAM_PREFIX) ? name.slice(TYPE_PARAM_PREFIX.length) : name;
++}
+ function TSEntityNameToRuntime(node) {
+ 	if (node.type === "Identifier" || node.type === "ThisExpression") return node;
+ 	const left = TSEntityNameToRuntime(node.left);
+@@ -555,7 +559,25 @@ function collectParams(node) {
+ 		typeParams
+ 	}));
+ }
+-async function collectDependencies(context, node, importer, namespaceStmts, children, identifierMap) {
++function collectValueOnlyNames(body) {
++	const values = /* @__PURE__ */ new Set();
++	const types = /* @__PURE__ */ new Set();
++	for (const stmt of body) {
++		if (stmt.type === "ImportDeclaration") {
++			for (const specifier of stmt.specifiers) types.add(specifier.local.name);
++			continue;
++		}
++		const decl = is.oneOf(stmt, ["ExportNamedDeclaration", "ExportDefaultDeclaration"]) && stmt.declaration ? stmt.declaration : stmt;
++		if (decl.type === "VariableDeclaration") {
++			for (const declarator of decl.declarations) if (declarator.id.type === "Identifier") values.add(declarator.id.name);
++		} else if (is.oneOf(decl, ["TSDeclareFunction", "FunctionDeclaration"])) {
++			if (decl.id) values.add(decl.id.name);
++		} else if (decl.id?.type === "Identifier") types.add(decl.id.name);
++	}
++	for (const name of types) values.delete(name);
++	return values;
++}
++async function collectDependencies(context, node, importer, namespaceStmts, children, identifierMap, typeParamNames, valueOnlyNames) {
+ 	const deps = /* @__PURE__ */ new Set();
+ 	const seen = /* @__PURE__ */ new Set();
+ 	const preserveImportTypeCache = /* @__PURE__ */ new Map();
+@@ -565,18 +587,14 @@ async function collectDependencies(context, node, importer, namespaceStmts, chil
+ 		return node.type === "Identifier" && currentInferred.has(node.name);
+ 	}
+ 	await walkAsync(node, {
+-		enter(node) {
+-			if (node.type !== "TSConditionalType") return;
+-			const inferred = collectInferredNames(node.extendsType);
+-			inferredStack.push(inferred);
++		enter(node, path) {
++			const { parent } = path;
++			if (parent?.type === "TSConditionalType" && parent.trueType === node) inferredStack.push(collectInferredNames(parent.extendsType));
+ 		},
+ 		async leave(node, path) {
+ 			const { parent } = path;
+-			if (node.type === "TSConditionalType") inferredStack.pop();
+-			else if (parent?.type === "TSConditionalType") {
+-				const trueBranch = parent.trueType === node;
+-				currentInferred = new Set((trueBranch ? inferredStack : inferredStack.slice(0, -1)).flat());
+-			} else currentInferred = /* @__PURE__ */ new Set();
++			currentInferred = new Set(inferredStack.flat());
++			if (parent?.type === "TSConditionalType" && parent.trueType === node) inferredStack.pop();
+ 			if (node.type === "ExportNamedDeclaration") {
+ 				for (const specifier of node.specifiers) if (specifier.type === "ExportSpecifier") addDependency(specifier.local);
+ 			} else if (node.type === "TSInterfaceDeclaration" && node.extends) for (const heritage of node.extends || []) addDependency(heritage.expression);
+@@ -595,9 +613,13 @@ async function collectDependencies(context, node, importer, namespaceStmts, chil
+ 				if (node.computed && isReferenceId(node.key)) addDependency(node.key);
+ 				if ("value" in node && isReferenceId(node.value)) addDependency(node.value);
+ 			} else switch (node.type) {
+-				case "TSTypeReference":
+-					addDependency(TSEntityNameToRuntime(node.typeName));
++				case "TSTypeReference": {
++					const reference = TSEntityNameToRuntime(node.typeName);
++					if (reference.type === "Identifier" && !isInferred(reference) && typeParamNames.has(reference.name)) reference.name = `${TYPE_PARAM_PREFIX}${reference.name}`;
++					else if (reference.type === "Identifier" && valueOnlyNames.has(reference.name)) break;
++					addDependency(reference);
+ 					break;
++				}
+ 				case "TSQualifiedName":
+ 					addDependency(getIdFromTSEntityName(node.left));
+ 					break;
+@@ -1212,6 +1234,7 @@ function createFakeJsPlugin({ sourcemap, cjsDefault, sideEffects }) {
+ 		if (directives.length) commentsMap.set(id, directives);
+ 		const appendStmts = [];
+ 		const namespaceStmts = /* @__PURE__ */ new Map();
++		const valueOnlyNames = collectValueOnlyNames(program.body);
+ 		for (const [i, stmt] of program.body.entries()) {
+ 			const setStmt = (stmt) => program.body[i] = stmt;
+ 			if (rewriteImportExport(stmt, setStmt, appendStmts)) continue;
+@@ -1245,7 +1268,7 @@ function createFakeJsPlugin({ sourcemap, cjsDefault, sideEffects }) {
+ 			}
+ 			const params = collectParams(decl);
+ 			const childrenSet = /* @__PURE__ */ new Set();
+-			const deps = await collectDependencies(this, decl, id, namespaceStmts, childrenSet, identifierMap);
++			const deps = await collectDependencies(this, decl, id, namespaceStmts, childrenSet, identifierMap, new Set(params.map(({ name }) => name)), valueOnlyNames);
+ 			const children = Array.from(childrenSet).filter((child) => bindings.every((b) => child !== b));
+ 			if (decl !== stmt) decl.comments = stmt.comments;
+ 			const declarationId = registerDeclaration({
+@@ -1266,7 +1289,7 @@ function createFakeJsPlugin({ sourcemap, cjsDefault, sideEffects }) {
+ 				id: null,
+ 				generator: false,
+ 				async: false,
+-				params: params.map(({ name }) => b.Identifier({ name })),
++				params: params.map(({ name }) => b.Identifier({ name: `${TYPE_PARAM_PREFIX}${name}` })),
+ 				body: depsBody,
+ 				expression: true
+ 			});
+@@ -1377,7 +1400,7 @@ function createFakeJsPlugin({ sourcemap, cjsDefault, sideEffects }) {
+ 			});
+ 			const transformedParams = depsFn.params;
+ 			for (const [i, transformedParam] of transformedParams.entries()) {
+-				const transformedName = transformedParam.name;
++				const transformedName = stripTypeParamPrefix(transformedParam.name);
+ 				for (const originalTypeParam of declaration.params[i].typeParams) originalTypeParam.name = transformedName;
+ 			}
+ 			const transformedDeps = depsFn.body.elements;
+@@ -1388,7 +1411,7 @@ function createFakeJsPlugin({ sourcemap, cjsDefault, sideEffects }) {
+ 					undefinedDep.start = transformedDep.start;
+ 					undefinedDep.end = transformedDep.end;
+ 					transformedDep = undefinedDep;
+-				} else if (isInfer(transformedDep)) transformedDep.name = "__Infer";
++				} else if (transformedDep.type === "Identifier") transformedDep.name = isInfer(transformedDep) ? "__Infer" : stripTypeParamPrefix(transformedDep.name);
+ 				if (originalDep.replace) originalDep.replace(transformedDep);
+ 				else Object.assign(originalDep, transformedDep);
+ 			}

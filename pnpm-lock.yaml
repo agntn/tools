@@ -16,6 +16,9 @@ catalogs:
 overrides:
   vite@*: npm:@voidzero-dev/vite-plus-core@1.0.0
 
+patchedDependencies:
+  rolldown-plugin-dts@0.28.6: 8a593ed00cc468d877800ee8f965c657db3bd95f4f3a6214be8122f98df34379
+
 importers:
 
   .:
@@ -5744,7 +5747,7 @@ snapshots:
       nf3: 0.3.24
       pathe: 2.0.3
       rolldown: 1.2.11
-      rolldown-plugin-dts: 0.28.6(rolldown@1.2.11)(typescript@7.0.2)
+      rolldown-plugin-dts: 0.28.6(patch_hash=8a593ed00cc468d877800ee8f965c657db3bd95f4f3a6214be8122f98df34379)(rolldown@1.2.11)(typescript@7.0.2)
       tinyglobby: 0.2.17
     transitivePeerDependencies:
       - '@typescript/native-preview'
@@ -6011,7 +6014,7 @@ snapshots:
 
   retry@0.13.1: {}
 
-  rolldown-plugin-dts@0.28.6(rolldown@1.2.11)(typescript@7.0.2):
+  rolldown-plugin-dts@0.28.6(patch_hash=8a593ed00cc468d877800ee8f965c657db3bd95f4f3a6214be8122f98df34379)(rolldown@1.2.11)(typescript@7.0.2):
     dependencies:
       dts-resolver: 3.0.0
       get-tsconfig: 5.0.0-beta.6
