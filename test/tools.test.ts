@@ -330,6 +330,27 @@ describe("MCP adapter", () => {
     });
   });
 
+  it("hands the client the title and website from the server info", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer(
+      { name: "demo", version: "0.0.0", title: "Demo", websiteUrl: "https://demo.example" },
+      [echo],
+    );
+    const client = new Client({ name: "test", version: "0.0.0" });
+    open.push(client, server);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    expect(client.getServerVersion()).toEqual({
+      name: "demo",
+      version: "0.0.0",
+      title: "Demo",
+      websiteUrl: "https://demo.example",
+    });
+    expect((await client.callTool({ name: "nope", arguments: {} })).content).toEqual([
+      { type: "text", text: 'Unknown demo tool: "nope"' },
+    ]);
+  });
+
   it("passes success, returned failure, validation failure and thrown failure", async () => {
     const client = await mcpClient();
     const call = (args: Readonly<Record<string, unknown>>) =>
