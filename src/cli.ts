@@ -13,7 +13,7 @@ import { parseArgs } from "node:util";
 
 import { Value } from "typebox/value";
 
-import { stripEscapes } from "./escapes.ts";
+import { sanitizeText } from "./escapes.ts";
 import {
   indexTools,
   invokeTool,
@@ -554,26 +554,6 @@ function toolInput(
   }
   if (errors.length > 0) throw new ToolInputError(errors);
   return Value.Convert(tool.input, input);
-}
-
-/** C0 and C1 controls but tab and line feed, and the bidi marks, embeddings, overrides and isolates. */
-const FORGING =
-  /* oxlint-disable-next-line no-control-regex */
-  /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u206F]/g;
-
-/**
- * Makes multi-line tool text safe for a terminal. Unlike {@link sanitizeLine}
- * it keeps the layout: line feeds, tabs and the joiners of emoji and scripts
- * (ZWJ, ZWNJ) stay, CR and CRLF become a line feed, and the Unicode line and
- * paragraph separators become a space so words do not run together.
- *
- * @param text - Tool text.
- * @returns {string} The text without escape sequences or other control characters.
- */
-function sanitizeText(text: string): string {
-  return stripEscapes(text.replaceAll(/\r\n?/g, "\n"))
-    .replaceAll(FORGING, "")
-    .replaceAll(/[\u2028\u2029]/g, " ");
 }
 
 /**

@@ -552,4 +552,97 @@ describe("Pi adapter", () => {
   it("leaves the call line to Pi without renderers", () => {
     expect(register({})).not.toHaveProperty("renderCall");
   });
+
+  /* A Pi context whose dialog records each question and gives `answer`. */
+  function dialog(answer: boolean, hasUI = true) {
+    const asked: string[] = [];
+    const ctx = {
+      hasUI,
+      ui: {
+        confirm: async (
+          title: string,
+          message: string,
+          opts?: Readonly<{ signal?: AbortSignal }>,
+        ) => {
+          asked.push(`${title} | ${message} | ${opts?.signal ? "signal" : "no signal"}`);
+          return answer;
+        },
+      },
+    };
+    return { asked, ctx };
+  }
+
+  /* Runs one call of `demo_echo` the way Pi does. */
+  async function call(
+    options: PiToolOptions,
+    args: Readonly<Record<string, unknown>>,
+    ctx: object,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await register(options).execute("call-1", args, signal, undefined, ctx as never);
+  }
+
+  const ask: PiToolOptions = {
+    confirm: {
+      demo_echo: ({ word }) => ({
+        title: "Echo?\nFAKE",
+        message: `Word\t${String(word)}\r\n\u001B[31mred\u202E\u2028end`,
+      }),
+    },
+  };
+
+  it("asks with the validated input, then runs the call on a yes", async () => {
+    const { asked, ctx } = dialog(true);
+    const result = await call(ask, { word: "hi" }, ctx, new AbortController().signal);
+    expect(asked).toEqual(["Echo? FAKE | Word\thi\nred end | signal"]);
+    expect(result).toMatchObject({ content: [{ type: "text", text: "hi" }] });
+  });
+
+  it("refuses on a no without running the call", async () => {
+    const { ctx } = dialog(false);
+    await expect(call(ask, { word: "boom" }, ctx)).rejects.toThrow(
+      "demo_echo was cancelled by the user. Do not retry unless the user asks again.",
+    );
+  });
+
+  it("refuses without a UI instead of running unasked", async () => {
+    const { asked, ctx } = dialog(true, false);
+    await expect(call(ask, { word: "boom" }, ctx)).rejects.toThrow(
+      "demo_echo needs interactive approval in Pi TUI or RPC mode",
+    );
+    expect(asked).toEqual([]);
+  });
+
+  it("runs without a dialog when the question comes back empty", async () => {
+    const { asked, ctx } = dialog(false, false);
+    const result = await call({ confirm: { demo_echo: () => undefined } }, { word: "hi" }, ctx);
+    expect(asked).toEqual([]);
+    expect(result).toMatchObject({ content: [{ type: "text", text: "hi" }] });
+  });
+
+  it("rejects bad arguments before anyone is asked", async () => {
+    const { asked, ctx } = dialog(true);
+    await expect(call(ask, { word: "hi", extra: 1 }, ctx)).rejects.toThrow("unknown property");
+    expect(asked).toEqual([]);
+  });
+
+  it("reports an abort during the dialog as the abort, not as a no", async () => {
+    const controller = new AbortController();
+    const ctx = {
+      hasUI: true,
+      ui: {
+        confirm: async () => {
+          controller.abort(new Error("call aborted"));
+          return false;
+        },
+      },
+    };
+    await expect(call(ask, { word: "hi" }, ctx, controller.signal)).rejects.toThrow("call aborted");
+  });
+
+  it("refuses a question for a tool that isn't in the list", () => {
+    expect(() => register({ confirm: { demo_ecko: () => undefined } })).toThrow(
+      new ToolDefinitionError('confirm names "demo_ecko", which isn\'t in the tool list'),
+    );
+  });
 });
