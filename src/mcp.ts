@@ -22,6 +22,10 @@ export interface McpServerInfo {
   /** Server name, also used in the unknown-tool message. */
   readonly name: string;
   readonly version: string;
+  /** Display name for clients that show one, such as `Forges`. */
+  readonly title?: string;
+  /** Project home a client can link to. */
+  readonly websiteUrl?: string;
 }
 
 /**
@@ -69,16 +73,14 @@ export function errorResult(...lines: readonly string[]): CallToolResult {
  * clients that see structured output prefer it over `content` and would hide
  * the readable answer. Every fact a follow-up call needs belongs in the text.
  *
- * @param info - Server name and version.
+ * @param info - Server name, version and optional title and website, sent to the client as given.
  * @param tools - Tools to serve.
  * @returns {Server} Unconnected MCP server.
  */
 export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinition[]): Server {
   const byName = indexTools(tools);
-  const server = new Server(
-    { name: info.name, version: info.version },
-    { capabilities: { tools: {} } },
-  );
+  const { name, version, title, websiteUrl } = info;
+  const server = new Server({ name, version, title, websiteUrl }, { capabilities: { tools: {} } });
 
   server.setRequestHandler("tools/list", () => ({
     tools: tools.map((tool): Tool => ({
@@ -93,7 +95,7 @@ export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinit
   server.setRequestHandler("tools/call", async (request, ctx) => {
     const tool = byName.get(request.params.name);
     if (!tool) {
-      return errorResult(`Unknown ${info.name} tool: ${JSON.stringify(request.params.name)}`);
+      return errorResult(`Unknown ${name} tool: ${JSON.stringify(request.params.name)}`);
     }
 
     try {
