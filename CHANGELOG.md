@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.1.1
+
+[compare changes](https://github.com/agntn/tools/compare/v0.1.0...v0.1.1)
+
+### 🚀 Enhancements
+
+- **mcp:** Keep the server title and website ([#36](https://github.com/agntn/tools/pull/36))
+
+### 🩹 Fixes
+
+- **pi:** Stop turning Pi 1.0 away at install ([#30](https://github.com/agntn/tools/pull/30))
+- **release:** Let Publish outlive autofix ([#33](https://github.com/agntn/tools/pull/33))
+- Ship TypeBox types tsc actually accepts ([#37](https://github.com/agntn/tools/pull/37))
+
+### 🏡 Chore
+
+- Apply automated updates ([6bb14b3](https://github.com/agntn/tools/commit/6bb14b3))
+
+### ❤️ Contributors
+
+- Aeitwoen ([@aeitwoen](https://github.com/aeitwoen))
+- Ori ([@oritwoen](https://github.com/oritwoen))
+
 ## v0.1.0
 
 ### 🚀 Enhancements
