@@ -85,7 +85,7 @@ const { views, answers, cases, paused, hostIndex, caseIndex, step } = useLanding
       :checks="[
         'Escape sequences out, the same pattern Node uses',
         'Newlines, U+2028 and bidi overrides turn into spaces',
-        'Error text from MCP and every OMP status line goes through it',
+        'MCP error text, OMP status lines and Pi call lines all go through it',
       ]"
       reverse
     >
