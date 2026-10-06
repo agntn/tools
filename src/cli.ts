@@ -2,8 +2,8 @@
  * CLI adapter: one command per {@link ToolDefinition}, plus the package's own
  * commands and an optional stdio MCP server, with no CLI library underneath.
  *
- * A tool's properties become flags, its {@link ToolCliHints} pick positional
- * arguments and stdin, and every call goes through {@link invokeTool}, so the
+ * A tool's properties become flags, its {@link ToolCliHints} pick positionals,
+ * short flags and stdin, and every call goes through {@link invokeTool}, so the
  * command line validates and fails like every other surface. A package
  * command is a tool definition too, one that only the CLI gets.
  */
@@ -56,6 +56,9 @@ const FLAG_WORD = /^[a-z0-9][a-z0-9.-]*$/;
 /** Flags every tool command answers itself. */
 const RESERVED_FLAGS = new Set(["help", "version", "json"]);
 
+/** A short flag: one letter, so a negative number never reads as one. */
+const SHORT_FLAG = /^[a-z]$/i;
+
 type FieldKind = "string" | "number" | "boolean" | "enum" | "json";
 
 interface Field {
@@ -65,6 +68,9 @@ interface Field {
   readonly flag: string;
   readonly kind: FieldKind;
   readonly positional: boolean;
+  /** Takes the words the other positionals leave, so it's always the last one. */
+  readonly rest: boolean;
+  readonly short: string | undefined;
   readonly stdin: boolean;
 }
 
@@ -134,6 +140,42 @@ function fieldKind(schema: SchemaNode): FieldKind {
   return TYPE_KINDS.get(schema.type) ?? "string";
 }
 
+interface CliHints {
+  /** The `positional` hint with `rest` at the end. */
+  readonly positional: readonly string[];
+  readonly rest: readonly string[];
+  readonly short: Readonly<Record<string, string>>;
+  readonly stdin: readonly string[];
+}
+
+/**
+ * @param tool - Tool to read.
+ * @returns {CliHints} Its hints, every key a property of the tool.
+ * @throws {ToolDefinitionError} When a hint names a property the tool lacks, or a positional twice.
+ */
+function cliHints(tool: ToolDefinition): CliHints {
+  const cli = tool.cli ?? {};
+  const rest = cli.rest === undefined ? [] : [cli.rest];
+  const hints = {
+    positional: [...(cli.positional ?? []), ...rest],
+    rest,
+    short: cli.short ?? {},
+    stdin: cli.stdin ?? [],
+  };
+  const properties = tool.input.properties as Readonly<Record<string, unknown>>;
+  for (const key of [...hints.positional, ...Object.keys(hints.short), ...hints.stdin]) {
+    if (!Object.hasOwn(properties, key)) {
+      throw new ToolDefinitionError(`${tool.name}: cli hint names unknown property ${key}`);
+    }
+  }
+  const { positional } = hints;
+  const repeated = positional.find((key, index) => positional.indexOf(key) !== index);
+  if (repeated !== undefined) {
+    throw new ToolDefinitionError(`${tool.name}: cli hint lists positional ${repeated} twice`);
+  }
+  return hints;
+}
+
 /**
  * Reads a tool's schema and hints into command line fields.
  *
@@ -143,18 +185,7 @@ function fieldKind(schema: SchemaNode): FieldKind {
  */
 function toolFields(tool: ToolDefinition): Field[] {
   const properties = tool.input.properties as Readonly<Record<string, SchemaNode>>;
-  const positional = tool.cli?.positional ?? [];
-  const stdin = tool.cli?.stdin ?? [];
-  for (const key of [...positional, ...stdin]) {
-    if (!Object.hasOwn(properties, key)) {
-      throw new ToolDefinitionError(`${tool.name}: cli hint names unknown property ${key}`);
-    }
-  }
-  const repeated = positional.find((key, index) => positional.indexOf(key) !== index);
-  if (repeated !== undefined) {
-    throw new ToolDefinitionError(`${tool.name}: cli hint lists positional ${repeated} twice`);
-  }
-
+  const { positional, rest, short, stdin } = cliHints(tool);
   const keys = [
     ...positional,
     ...Object.keys(properties).filter((key) => !positional.includes(key)),
@@ -169,9 +200,12 @@ function toolFields(tool: ToolDefinition): Field[] {
       flag: flagName(key),
       kind: fieldKind(properties[key] ?? {}),
       positional: positional.includes(key),
+      rest: rest.includes(key),
+      short: Object.hasOwn(short, key) ? short[key] : undefined,
       stdin: stdin.includes(key),
     };
     assertField(tool, field, !field.positional && flags.has(field.flag));
+    assertShort(tool, field);
     if (!field.positional) flags.add(field.flag);
     return field;
   });
@@ -224,6 +258,33 @@ function assertField(tool: ToolDefinition, field: Field, taken: boolean): void {
   if (field.stdin && field.kind !== "string") {
     throw new ToolDefinitionError(`${tool.name}: stdin property ${field.key} must be a string`);
   }
+  if (field.rest && field.kind !== "string") {
+    throw new ToolDefinitionError(`${tool.name}: rest property ${field.key} must be a string`);
+  }
+}
+
+/**
+ * @param tool - Tool the field belongs to.
+ * @param field - Field to check.
+ * @throws {ToolDefinitionError} When the short flag is no letter, is `h` or sits on a positional.
+ */
+function assertShort(tool: ToolDefinition, field: Field): void {
+  if (field.short === undefined) return;
+  if (field.positional) {
+    throw new ToolDefinitionError(
+      `${tool.name}: positional property ${field.key} takes no short flag`,
+    );
+  }
+  if (!SHORT_FLAG.test(field.short)) {
+    throw new ToolDefinitionError(
+      `${tool.name}: short flag ${JSON.stringify(field.short)} of ${field.key} must match ${SHORT_FLAG}`,
+    );
+  }
+  if (field.short === "h") {
+    throw new ToolDefinitionError(
+      `${tool.name}: property ${field.key} takes -h, which asks for help`,
+    );
+  }
 }
 
 /**
@@ -250,7 +311,7 @@ function assertRequiredPositionalsFirst(tool: ToolDefinition, fields: readonly F
 /**
  * Every spelling the CLI reads for an option names one property: a boolean also
  * answers to `--no-<flag>`, so a boolean `cache` and a property `noCache`
- * would both claim `--no-cache`.
+ * would both claim `--no-cache`, and two short flags can land on one letter.
  *
  * @param tool - Tool the fields belong to.
  * @param fields - The tool's fields.
@@ -259,12 +320,13 @@ function assertRequiredPositionalsFirst(tool: ToolDefinition, fields: readonly F
 function assertOneOptionPerSpelling(tool: ToolDefinition, fields: readonly Field[]): void {
   const owners = new Map<string, string>();
   for (const field of fields.filter((each) => !each.positional)) {
-    const negation = field.kind === "boolean" ? [`no-${field.flag}`] : [];
-    for (const spelling of [field.flag, ...negation]) {
+    const negation = field.kind === "boolean" ? [`--no-${field.flag}`] : [];
+    const short = field.short === undefined ? [] : [`-${field.short}`];
+    for (const spelling of [`--${field.flag}`, ...negation, ...short]) {
       const owner = owners.get(spelling);
       if (owner !== undefined) {
         throw new ToolDefinitionError(
-          `${tool.name}: properties ${owner} and ${field.key} both answer to --${spelling}`,
+          `${tool.name}: properties ${owner} and ${field.key} both answer to ${spelling}`,
         );
       }
       owners.set(spelling, field.key);
@@ -294,6 +356,16 @@ function fieldDescription(field: Field): string {
 function valueHint(field: Field): string {
   if (field.kind === "enum") return (field.schema.enum as string[]).join("|");
   return field.kind === "string" ? field.flag : field.kind;
+}
+
+/**
+ * @param field - Option field.
+ * @returns {string} Its long spelling in the usage text.
+ */
+function optionSpelling(field: Field): string {
+  return field.kind === "boolean"
+    ? `--[no-]${field.flag}`
+    : `--${field.flag}=<${valueHint(field)}>`;
 }
 
 /**
@@ -343,9 +415,14 @@ function parseWords(
     options: Object.fromEntries(
       Object.entries(options).map(([flag, field]) => [
         flag,
-        { type: field === "json" || field.kind === "boolean" ? "boolean" : "string" },
+        field === "json"
+          ? { type: "boolean" }
+          : {
+              type: field.kind === "boolean" ? "boolean" : "string",
+              ...(field.short === undefined ? {} : { short: field.short }),
+            },
       ]),
-    ) as Record<string, { type: "boolean" | "string" }>,
+    ) as Record<string, { type: "boolean" | "string"; short?: string }>,
     strict: false,
     allowPositionals: true,
     allowNegative: true,
@@ -375,7 +452,7 @@ function parseWords(
 /**
  * @param fields - The command's fields.
  * @param positionals - Positional words in order.
- * @returns {Record<string, string>} Each positional property with its word.
+ * @returns {Record<string, string>} Each positional property with its word, `rest` with the others.
  */
 function positionalValues(
   fields: readonly Field[],
@@ -386,8 +463,8 @@ function positionalValues(
     emptyRecord<string>(),
     Object.fromEntries(
       takes.flatMap((field, index) => {
-        const value = positionals[index];
-        return value === undefined ? [] : [[field.key, value]];
+        const words = field.rest ? positionals.slice(index) : positionals.slice(index, index + 1);
+        return words.length === 0 ? [] : [[field.key, words.join(" ")]];
       }),
     ),
   );
@@ -396,9 +473,10 @@ function positionalValues(
 /**
  * @param fields - The command's fields.
  * @param positionals - Positional words in order.
- * @returns {string[]} The failure when there are more words than positional properties.
+ * @returns {string[]} The failure for words no positional takes.
  */
 function extraPositionals(fields: readonly Field[], positionals: readonly string[]): string[] {
+  if (fields.some((field) => field.rest)) return [];
   const extra = positionals.length - fields.filter((field) => field.positional).length;
   if (extra <= 0) return [];
   return [`Invalid arguments: ${extra} unexpected positional argument${extra === 1 ? "" : "s"}`];
@@ -441,8 +519,23 @@ function optionField(
   if (asksHelp(token, word)) return "help";
   const field = Object.hasOwn(options, token.name) ? options[token.name] : undefined;
   if (field === "json") return token.rawName === "--json" ? field : undefined;
-  if (field === undefined || token.rawName === `--${token.name}`) return field;
-  return token.rawName === `--no-${token.name}` && field.kind === "boolean" ? field : undefined;
+  return field !== undefined && spells(field, token, word) ? field : undefined;
+}
+
+/**
+ * `--flag`, `--no-flag` for a boolean, or the short flag as a whole word only,
+ * since `util.parseArgs` would read a mistyped `-provider` as `-p rovider`.
+ *
+ * @param field - Field the token's name points to.
+ * @param token - The token `util.parseArgs` made.
+ * @param word - The command line word it came from.
+ * @returns {boolean} Whether the token is a spelling the field takes.
+ */
+function spells(field: Field, token: OptionToken, word: string): boolean {
+  if (token.rawName === `--${field.flag}`) return true;
+  if (field.short !== undefined && token.rawName === `-${field.short}`)
+    return word === token.rawName;
+  return field.kind === "boolean" && token.rawName === `--no-${field.flag}`;
 }
 
 /**
@@ -460,7 +553,9 @@ function readOption(
 ): OptionRead {
   const field = optionField(options, token, word);
   if (field === undefined) {
-    const flags = Object.keys(options).map((flag) => `--${flag}`);
+    const flags = Object.entries(options).map(([flag, each]) =>
+      each === "json" || each.short === undefined ? `--${flag}` : `--${flag} (-${each.short})`,
+    );
     const takes = flags.length > 0 ? flags.join(", ") : "no options";
     return { error: `Invalid arguments: unknown option ${JSON.stringify(word)}; takes ${takes}` };
   }
@@ -471,7 +566,7 @@ function readOption(
   }
   const problem = optionProblem(field, token, seen.includes(field.key));
   if (problem !== undefined) return { error: `Invalid arguments: --${field.flag} ${problem}` };
-  const value = field.kind === "boolean" ? token.rawName === `--${field.flag}` : token.value;
+  const value = field.kind === "boolean" ? token.rawName !== `--no-${field.flag}` : token.value;
   return { key: field.key, value: value ?? "" };
 }
 
@@ -866,12 +961,12 @@ function commandUsage(options: CliOptions, command: Command): string {
   const flags = command.fields.filter((field) => !field.positional);
   const takesOptions = flags.length > 0 || command.json;
   const words = positional.map((field) => {
-    const name = field.flag.toUpperCase();
+    const name = `${field.flag.toUpperCase()}${field.rest ? "..." : ""}`;
     return field.required ? `<${name}>` : `[${name}]`;
   });
   const rows = [
     ...flags.map((field): [string, string] => [
-      field.kind === "boolean" ? `--[no-]${field.flag}` : `--${field.flag}=<${valueHint(field)}>`,
+      `${field.short === undefined ? "" : `-${field.short}, `}${optionSpelling(field)}`,
       fieldDescription(field),
     ]),
     ...(command.json

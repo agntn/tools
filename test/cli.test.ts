@@ -286,6 +286,109 @@ describe("CLI commands", () => {
   });
 });
 
+describe("CLI short flags and rest", () => {
+  const find = (cli: NonNullable<Parameters<typeof defineTool>[0]["cli"]>) =>
+    defineTool({
+      name: "demo_find",
+      title: "Find",
+      description: "Find a place.",
+      effect: "read",
+      input: Type.Object(
+        {
+          query: Type.String({ description: "Place to find" }),
+          provider: Type.Optional(Type.String()),
+          limit: Type.Optional(Type.Integer()),
+          exact: Type.Optional(Type.Boolean()),
+        },
+        { additionalProperties: false },
+      ),
+      cli,
+      execute: (input) => ({
+        content: [{ type: "text", text: JSON.stringify(input) }],
+        details: null,
+      }),
+    });
+  const hints = { rest: "query", short: { provider: "p", limit: "n", exact: "x" } };
+  const cli = (tool = find(hints)): CliOptions => ({
+    ...options,
+    tools: [tool],
+    default: undefined,
+    fallback: undefined,
+  });
+  const takes = "takes --provider (-p), --limit (-n), --exact (-x), --json";
+
+  it("joins the words left into the rest property and reads short flags anywhere", async () => {
+    expect(
+      await run(["find", "52", "13", "46.9", "N", "-p", "osm", "-n", "2", "-x"], cli()),
+    ).toEqual({
+      stdout: '{"query":"52 13 46.9 N","provider":"osm","limit":2,"exact":true}\n',
+      stderr: "",
+      exitCode: undefined,
+    });
+    expect(
+      (await run(["find", "-n", "1", "Warsaw", "--no-exact", "Old", "Town"], cli())).stdout,
+    ).toBe('{"query":"Warsaw Old Town","limit":1,"exact":false}\n');
+    expect((await run(["find", "--", "-12", "5"], cli())).stdout).toBe('{"query":"-12 5"}\n');
+  });
+
+  it("takes a short flag only as a whole word", async () => {
+    const tool = find(hints);
+    const execute = vi.spyOn(tool, "execute");
+    for (const word of ["-pfoo", "-xn", "-provider", "-p=osm"]) {
+      expect((await run(["find", word, "Warsaw"], cli(tool))).stderr).toBe(
+        `Invalid arguments: unknown option ${JSON.stringify(word)}; ${takes}\n`,
+      );
+    }
+    expect((await run(["find", "Warsaw", "-p", "a", "--provider", "b"], cli(tool))).stderr).toBe(
+      "Invalid arguments: --provider given more than once\n",
+    );
+    expect((await run(["find", "Warsaw", "-p"], cli(tool))).stderr).toBe(
+      "Invalid arguments: --provider needs a value\n",
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("leaves a required rest to the core when no word is left", async () => {
+    const { stderr, exitCode } = await run(["find", "-n", "1"], cli());
+    expect(stderr).toBe("Invalid arguments at /: must have required properties query\n");
+    expect(exitCode).toBe(1);
+  });
+
+  it("shows the short flags and the rest in the usage", async () => {
+    const { stdout } = await run(["find", "--help"], cli());
+    expect(stdout).toContain("USAGE demo find [OPTIONS] <QUERY...>\n");
+    expect(stdout).toContain("  -p, --provider=<provider>");
+    expect(stdout).toContain("  -x, --[no-]exact");
+  });
+
+  it("rejects short and rest hints the schema cannot take", () => {
+    const build = (hint: Parameters<typeof find>[0]) => () => createCli(cli(find(hint)));
+    expect(build({ rest: "limit" })).toThrow("demo_find: rest property limit must be a string");
+    expect(build({ rest: "nope" })).toThrow("demo_find: cli hint names unknown property nope");
+    expect(build({ positional: ["query"], rest: "query" })).toThrow(
+      "demo_find: cli hint lists positional query twice",
+    );
+    expect(build({ positional: ["provider"], rest: "query" })).toThrow(
+      "demo_find: required positional query comes after an optional one",
+    );
+    expect(build({ short: { nope: "z" } })).toThrow(
+      "demo_find: cli hint names unknown property nope",
+    );
+    expect(build({ rest: "query", short: { query: "q" } })).toThrow(
+      "demo_find: positional property query takes no short flag",
+    );
+    for (const letter of ["", "pp", "1", "-", "é"]) {
+      expect(build({ short: { provider: letter } })).toThrow(/must match/);
+    }
+    expect(build({ short: { provider: "h" } })).toThrow(
+      "demo_find: property provider takes -h, which asks for help",
+    );
+    expect(build({ short: { provider: "p", limit: "p" } })).toThrow(
+      "demo_find: properties provider and limit both answer to -p",
+    );
+  });
+});
+
 describe("CLI definitions", () => {
   const tool = (cli: NonNullable<Parameters<typeof defineTool>[0]["cli"]>, json = false) =>
     defineTool({
