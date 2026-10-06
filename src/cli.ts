@@ -392,9 +392,11 @@ interface ParsedWords {
 
 /**
  * Reads the words after the command name, on `util.parseArgs` tokens. Only
- * `--flag`, `--flag=value` and, for a boolean, `--no-flag` are options;
- * an unknown option, a single dash before a name, a missing value, a value
- * given twice or a positional too many is a failure, never a skipped word.
+ * `--flag`, `--flag=value`, for a boolean `--no-flag`, and a short flag as
+ * a whole word are options. A dashed word that spells none fills a free
+ * positional ({@link takeDashedText}); past that, an unknown option, a missing
+ * value, a value given twice or a positional too many is a failure, never a
+ * skipped word.
  *
  * @param rawArgs - Words after the command name.
  * @param fields - The command's fields.
@@ -413,8 +415,9 @@ function parseWords(
     ...(takesJson ? [["json", "json"] as [string, "json"]] : []),
   ];
   const options: Readonly<Record<string, Field | "json">> = Object.fromEntries(entries);
+  const { args, origins, texts, refused } = takeDashedText(rawArgs, fields, options);
   const { tokens } = parseArgs({
-    args: [...rawArgs],
+    args,
     options: Object.fromEntries(
       Object.entries(options).map(([flag, field]) => [
         flag,
@@ -433,23 +436,163 @@ function parseWords(
   });
 
   const values = emptyRecord<string | boolean>();
-  const errors: string[] = [];
-  const positionals: string[] = [];
+  const errors = refused.map((word) => unknownOption(options, word));
   const flags = new Set<string>();
   for (const token of tokens) {
-    if (token.kind === "positional") positionals.push(token.value);
     if (token.kind !== "option") continue;
-    const read = readOption(options, token, rawArgs[token.index] ?? "", Object.keys(values));
+    const read = readOption(options, token, args[token.index] ?? "", Object.keys(values));
     if ("error" in read) errors.push(read.error);
     else if ("flag" in read) flags.add(read.flag);
     else values[read.key] = read.value;
   }
+  const positionals = inLineOrder(tokens, origins, texts);
   return {
     values: Object.assign(values, positionalValues(fields, positionals)),
     json: flags.has("json"),
     help: flags.has("help"),
     errors: [...new Set(errors.length > 0 ? errors : extraPositionals(fields, positionals))],
   };
+}
+
+/** The line for `util.parseArgs` without the dashed text, and where each word stood. */
+interface DashedText {
+  readonly args: string[];
+  /** Index on the original line of each word in `args`. */
+  readonly origins: readonly number[];
+  /** Dashed words read as positionals, with their index on the original line. */
+  readonly texts: ReadonlyArray<readonly [number, string]>;
+  /** Dashed words no positional is left for, which fail as unknown options. */
+  readonly refused: readonly string[];
+}
+
+/**
+ * Morse, PGP armor and `-5` take a positional the plain words leave free, or fail as unknown
+ * options. Neither reaches `util.parseArgs`, which reads the inner `-` of `-.-.` as `--`.
+ *
+ * @param rawArgs - Words after the command name.
+ * @param fields - The command's fields.
+ * @param options - Option fields by flag, and `--json` when the command takes it.
+ * @returns {DashedText} The words left for `util.parseArgs` and the dashed text.
+ */
+function takeDashedText(
+  rawArgs: readonly string[],
+  fields: readonly Field[],
+  options: Readonly<Record<string, Field | "json">>,
+): DashedText {
+  const { dashed, plain } = scanWords(rawArgs, options);
+  const free = fields.filter((field) => field.positional).length - plain;
+  const taken = dashed.slice(0, Math.max(free, 0));
+  const skipped = new Set(dashed);
+  const origins = rawArgs.flatMap((_, index) => (skipped.has(index) ? [] : [index]));
+  const word = (index: number): string => rawArgs[index] ?? "";
+  return {
+    args: origins.map(word),
+    origins,
+    texts: taken.map((index) => [index, word(index)] as const),
+    refused: dashed.slice(taken.length).map(word),
+  };
+}
+
+/**
+ * @param rawArgs - Words after the command name.
+ * @param options - Option fields by flag, and `--json` when the command takes it.
+ * @returns {{ dashed: number[]; plain: number }} Dashed words that spell no option, plain words.
+ */
+function scanWords(
+  rawArgs: readonly string[],
+  options: Readonly<Record<string, Field | "json">>,
+): { dashed: number[]; plain: number } {
+  const dashed: number[] = [];
+  let plain = 0;
+  for (let index = 0; index < rawArgs.length; index++) {
+    const word = rawArgs[index] ?? "";
+    if (word === "--") return { dashed, plain: plain + rawArgs.length - index - 1 };
+    const kind = wordKind(word, options);
+    if (kind === "plain") plain++;
+    else if (kind === "text") dashed.push(index);
+    else if (kind === "valued") index++;
+  }
+  return { dashed, plain };
+}
+
+/**
+ * Reads a whole word the way {@link optionField} takes its tokens.
+ *
+ * @param word - One word before `--`.
+ * @param options - Option fields by flag, and `--json` when the command takes it.
+ * @returns {"plain" | "option" | "valued" | "text"} `valued` takes the next word as its value.
+ */
+function wordKind(
+  word: string,
+  options: Readonly<Record<string, Field | "json">>,
+): "plain" | "option" | "valued" | "text" {
+  if (!word.startsWith("-") || word === "-") return "plain";
+  if (word === "-h") return "option";
+  const field = word.startsWith("--")
+    ? longField(word.slice(2), options)
+    : shortField(word, options);
+  if (field === undefined) return "text";
+  if (field === "option" || field.kind === "boolean" || word.includes("=")) return "option";
+  return "valued";
+}
+
+/**
+ * @param tokens - Tokens of the line without the dashed text.
+ * @param origins - Index on the original line of each word `util.parseArgs` read.
+ * @param texts - The dashed text with its index on the original line.
+ * @returns {string[]} Every positional word, in the order the line gave them.
+ */
+function inLineOrder(
+  tokens: ReadonlyArray<Readonly<{ kind: string; index: number; value?: string | undefined }>>,
+  origins: readonly number[],
+  texts: ReadonlyArray<readonly [number, string]>,
+): string[] {
+  const read = tokens.flatMap((token) =>
+    token.kind === "positional" ? [[origins[token.index] ?? 0, token.value ?? ""] as const] : [],
+  );
+  return [...texts, ...read].toSorted(([a], [b]) => a - b).map(([, word]) => word);
+}
+
+/**
+ * @param spelled - A long option without its `--`, maybe with `=value`.
+ * @param options - Option fields by flag, and `--json` when the command takes it.
+ * @returns {Field | "option" | undefined} The field, or `option` for help, json, `--no-`.
+ */
+function longField(
+  spelled: string,
+  options: Readonly<Record<string, Field | "json">>,
+): Field | "option" | undefined {
+  const [name = ""] = spelled.split("=", 1);
+  if (name === "help") return "option";
+  const field = Object.hasOwn(options, name) ? options[name] : undefined;
+  if (field !== undefined) return field === "json" ? "option" : field;
+  return negatesBoolean(name, options) ? "option" : undefined;
+}
+
+/**
+ * @param name - A long option name without its `--`.
+ * @param options - Option fields by flag.
+ * @returns {boolean} Whether the name is the `no-` form of a boolean flag.
+ */
+function negatesBoolean(name: string, options: Readonly<Record<string, Field | "json">>): boolean {
+  const flag = name.slice(3);
+  const field = name.startsWith("no-") && Object.hasOwn(options, flag) ? options[flag] : undefined;
+  return field !== undefined && field !== "json" && field.kind === "boolean";
+}
+
+/**
+ * @param word - A word with one leading dash.
+ * @param options - Option fields by flag.
+ * @returns {Field | undefined} The field whose short flag the whole word is.
+ */
+function shortField(
+  word: string,
+  options: Readonly<Record<string, Field | "json">>,
+): Field | undefined {
+  return Object.values(options).find(
+    (field): field is Field =>
+      field !== "json" && field.short !== undefined && `-${field.short}` === word,
+  );
 }
 
 /**
@@ -543,6 +686,19 @@ function spells(field: Field, token: OptionToken, word: string): boolean {
 
 /**
  * @param options - Option fields by flag, and `--json` when the command takes it.
+ * @param word - The command line word that names no option.
+ * @returns {string} The failure, with every flag the command takes.
+ */
+function unknownOption(options: Readonly<Record<string, Field | "json">>, word: string): string {
+  const flags = Object.entries(options).map(([flag, each]) =>
+    each === "json" || each.short === undefined ? `--${flag}` : `--${flag} (-${each.short})`,
+  );
+  const takes = flags.length > 0 ? flags.join(", ") : "no options";
+  return `Invalid arguments: unknown option ${JSON.stringify(word)}; takes ${takes}`;
+}
+
+/**
+ * @param options - Option fields by flag, and `--json` when the command takes it.
  * @param token - The token `util.parseArgs` made.
  * @param word - The command line word it came from.
  * @param seen - Properties set by earlier words.
@@ -555,13 +711,7 @@ function readOption(
   seen: readonly string[],
 ): OptionRead {
   const field = optionField(options, token, word);
-  if (field === undefined) {
-    const flags = Object.entries(options).map(([flag, each]) =>
-      each === "json" || each.short === undefined ? `--${flag}` : `--${flag} (-${each.short})`,
-    );
-    const takes = flags.length > 0 ? flags.join(", ") : "no options";
-    return { error: `Invalid arguments: unknown option ${JSON.stringify(word)}; takes ${takes}` };
-  }
+  if (field === undefined) return { error: unknownOption(options, word) };
   if (field === "json" || field === "help") {
     return token.inlineValue === true
       ? { error: `Invalid arguments: ${token.rawName} takes no value` }

@@ -406,6 +406,73 @@ describe("CLI short flags and rest", () => {
   });
 });
 
+describe("CLI dashed text", () => {
+  const decode = defineTool({
+    name: "demo_decode",
+    title: "Decode",
+    description: "Decode a text.",
+    effect: "read",
+    input: Type.Object(
+      {
+        cipher: Type.String(),
+        text: Type.Optional(Type.String()),
+        key: Type.Optional(Type.String()),
+        strict: Type.Optional(Type.Boolean()),
+      },
+      { additionalProperties: false },
+    ),
+    cli: { positional: ["cipher", "text"], short: { key: "k" } },
+    execute: (input) => ({
+      content: [{ type: "text", text: JSON.stringify(input) }],
+      details: null,
+    }),
+  });
+  const cli: CliOptions = { ...options, tools: [decode], default: undefined, fallback: undefined };
+  const takes = "takes --key (-k), --strict, --json";
+
+  it("reads a dashed word that spells no option as the next free positional", async () => {
+    expect(await run(["decode", "morse", "-.-. .- -"], cli)).toEqual({
+      stdout: `{"cipher":"morse","text":"-.-. .- -"}\n`,
+      stderr: "",
+      exitCode: undefined,
+    });
+    expect((await run(["decode", "-----BEGIN PGP MESSAGE-----", "--strict"], cli)).stdout).toBe(
+      `{"cipher":"-----BEGIN PGP MESSAGE-----","strict":true}\n`,
+    );
+    expect((await run(["decode", "pgp", "-k", "-5", "--", "-k"], cli)).stdout).toBe(
+      `{"cipher":"pgp","text":"-k","key":"-5"}\n`,
+    );
+    expect((await run(["decode", "-.-.", "-k", "x", "morse", "--no-strict"], cli)).stdout).toBe(
+      `{"cipher":"-.-.","text":"morse","key":"x","strict":false}\n`,
+    );
+  });
+
+  it("keeps refusing a dashed word once the plain words fill the positionals", async () => {
+    const execute = vi.spyOn(decode, "execute");
+    expect((await run(["decode", "morse", "hi", "-.-."], cli)).stderr).toBe(
+      `Invalid arguments: unknown option "-.-."; ${takes}\n`,
+    );
+    expect((await run(["decode", "morse", "--kye", "x"], cli)).stderr).toBe(
+      `Invalid arguments: unknown option "--kye"; ${takes}\n`,
+    );
+    expect((await run(["decode", "morse", "-.-.", "--kye", "x", "--strict"], cli)).stderr).toBe(
+      [
+        `Invalid arguments: unknown option "-.-."; ${takes}`,
+        `Invalid arguments: unknown option "--kye"; ${takes}`,
+        "",
+      ].join("\n"),
+    );
+    expect((await run(["decode", "morse", "-.-.", "--", "x"], cli)).stderr).toBe(
+      `Invalid arguments: unknown option "-.-."; ${takes}\n`,
+    );
+    expect((await run(["decode", "morse", "-k"], cli)).stderr).toBe(
+      "Invalid arguments: --key needs a value\n",
+    );
+    expect(execute).not.toHaveBeenCalled();
+    expect((await run(["decode", "morse", "-h"], cli)).stdout).toContain("USAGE demo decode");
+  });
+});
+
 describe("CLI definitions", () => {
   const tool = (cli: NonNullable<Parameters<typeof defineTool>[0]["cli"]>, json = false) =>
     defineTool({
