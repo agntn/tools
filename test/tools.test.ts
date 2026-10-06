@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 
-import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import {
+  Client,
+  InMemoryTransport,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import type {
   ExtensionAPI as PiExtensionAPI,
   Theme as PiTheme,
@@ -8,6 +12,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ToolDefinition as OmpToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { asSchema } from "ai";
+import { H3 } from "h3";
+import { defineMcpHandler } from "h3-mcp";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { toAiTool, toAiTools } from "../src/ai.ts";
@@ -24,6 +30,7 @@ import {
   type ToolCallContext,
   type ToolResult,
 } from "../src/index.ts";
+import { toH3Tools } from "../src/h3.ts";
 import { callTool, createMcpServer, listTools } from "../src/mcp.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
@@ -268,7 +275,7 @@ describe("validateInput", () => {
 });
 
 describe("portability", () => {
-  it.each(["index.ts", "escapes.ts", "pi.ts", "omp.ts", "ai.ts"])(
+  it.each(["index.ts", "escapes.ts", "mcp-answers.ts", "h3.ts", "pi.ts", "omp.ts", "ai.ts"])(
     "keeps node:* out of src/%s",
     (file) => {
       const source = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
@@ -289,6 +296,7 @@ describe("one name, one tool", () => {
   it.each([
     ["listTools", () => listTools(twins)],
     ["toAiTools", () => toAiTools(twins)],
+    ["toH3Tools", () => toH3Tools({ name: "demo" }, twins)],
     ["registerPiTools", () => registerPiTools(host as unknown as PiExtensionAPI, twins)],
     ["registerOmpTools", () => registerOmpTools(host as unknown as ExtensionAPI, twins, { Text })],
   ])("%s refuses two tools with one name, as createMcpServer does", (_adapter, adapt) => {
@@ -555,6 +563,103 @@ describe("MCP adapter", () => {
     expect(await client.callTool({ name: "toString", arguments: {} })).toEqual({
       isError: true,
       content: [{ type: "text", text: 'Unknown demo tool: "toString"' }],
+    });
+  });
+});
+
+const signal = defineTool({
+  name: "demo_signal",
+  title: "Demo Signal",
+  description: "Report whether the call has an abort signal.",
+  effect: "read",
+  input: Type.Object({}),
+  execute: (_input, context) => ({
+    content: [{ type: "text", text: String(context.signal instanceof AbortSignal) }],
+    details: null,
+  }),
+});
+
+/**
+ * A real SDK client talking Streamable HTTP to an h3-mcp handler, through `app.fetch`.
+ *
+ * @returns {Promise<Client>} Connected client.
+ */
+async function h3Client(): Promise<Client> {
+  const app = new H3().all(
+    "/mcp",
+    defineMcpHandler({
+      name: "demo",
+      version: "0.0.0",
+      tools: toH3Tools({ name: "demo" }, [echo, slow, signal]),
+    }),
+  );
+  const transport = new StreamableHTTPClientTransport(new URL("http://localhost/mcp"), {
+    fetch: async (input, init) => app.fetch(new Request(input, init)),
+  });
+  const client = new Client({ name: "test", version: "0.0.0" });
+  open.push(client);
+  await client.connect(transport);
+  return client;
+}
+
+describe("h3-mcp adapter", () => {
+  it("lists over h3-mcp what tools/list answers", async () => {
+    const client = await h3Client();
+    expect((await client.listTools()).tools).toEqual(
+      JSON.parse(JSON.stringify(listTools([echo, slow, signal]))),
+    );
+  });
+
+  it("answers every known tool as the MCP server does", async () => {
+    const [h3, sdk] = await Promise.all([h3Client(), mcpClient()]);
+    const calls: ReadonlyArray<Readonly<Record<string, unknown>> | undefined> = [
+      { word: "hi", mode: "loud" },
+      { word: "fail" },
+      { word: "hi", mode: "x", "bad\nkey": 1 },
+      { word: "boom" },
+      undefined,
+    ];
+
+    for (const args of calls) {
+      const call = { name: "demo_echo", arguments: args };
+      expect(await h3.callTool(call)).toEqual(await sdk.callTool(call));
+    }
+  });
+
+  it("leaves an unknown name to h3-mcp's own JSON-RPC error", async () => {
+    const client = await h3Client();
+    await expect(client.callTool({ name: "toString", arguments: {} })).rejects.toThrow(
+      "Tool not found",
+    );
+  });
+
+  it("sends progress to a client that asked, numbered as the MCP server numbers it", async () => {
+    const client = await h3Client();
+    const updates: unknown[] = [];
+    const result = await client.callTool(
+      { name: "demo_slow", arguments: {} },
+      { onprogress: (update) => updates.push(update) },
+    );
+
+    expect(result).toEqual({ content: [{ type: "text", text: "progress on" }] });
+    expect(updates).toEqual([
+      { progress: 1, message: "warming up" },
+      { progress: 50, total: 100, message: "halfway" },
+      { progress: 51, message: "almost" },
+    ]);
+  });
+
+  it("gives the tool no progress callback when the client didn't ask", async () => {
+    const client = await h3Client();
+    expect(await client.callTool({ name: "demo_slow", arguments: {} })).toEqual({
+      content: [{ type: "text", text: "progress off" }],
+    });
+  });
+
+  it("hands the request's abort signal to the executor", async () => {
+    const client = await h3Client();
+    expect(await client.callTool({ name: "demo_signal", arguments: {} })).toEqual({
+      content: [{ type: "text", text: "true" }],
     });
   });
 });
