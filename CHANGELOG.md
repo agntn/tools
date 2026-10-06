@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.2.0
+
+[compare changes](https://github.com/agntn/tools/compare/v0.1.1...v0.2.0)
+
+### 🚀 Enhancements
+
+- Seat OMP tools in the top-level list ([#38](https://github.com/agntn/tools/pull/38))
+- **pi:** Draw the call line OMP already gets ([#39](https://github.com/agntn/tools/pull/39))
+- **pi:** Ask before a tool writes ([#40](https://github.com/agntn/tools/pull/40))
+- **mcp:** Serve tools without a Server ([#42](https://github.com/agntn/tools/pull/42))
+- Let a slow tool show it's still alive ([#43](https://github.com/agntn/tools/pull/43))
+- Serve tools through h3-mcp ([#47](https://github.com/agntn/tools/pull/47))
+
+### 🩹 Fixes
+
+- Refuse twin tool names on every host ([#46](https://github.com/agntn/tools/pull/46))
+
+### 📖 Documentation
+
+- Give the CLI a page of its own ([#48](https://github.com/agntn/tools/pull/48))
+
+### 🏡 Chore
+
+- ⚠️  Require Node.js 26 ([#44](https://github.com/agntn/tools/pull/44))
+
+#### ⚠️ Breaking Changes
+
+- ⚠️  Require Node.js 26 ([#44](https://github.com/agntn/tools/pull/44))
+
+### ❤️ Contributors
+
+- Ori
+- Aeitwoen
+
 ## v0.1.1
 
 [compare changes](https://github.com/agntn/tools/compare/v0.1.0...v0.1.1)
