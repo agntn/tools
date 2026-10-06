@@ -29,6 +29,8 @@ import { Value } from "typebox/value";
 
 import { stripEscapes } from "./escapes.ts";
 
+export { sanitizeText } from "./escapes.ts";
+
 /** Content block understood by MCP, Pi and OMP alike. */
 export type ToolContent =
   | { type: "text"; text: string }
