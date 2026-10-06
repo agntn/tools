@@ -67,9 +67,19 @@ export interface ToolCliHints {
   readonly stdin?: readonly string[];
 }
 
+/** How far a long call has come, for hosts that draw it. */
+export interface ToolProgress {
+  /** Work done so far. MCP skips an update where it doesn't grow. */
+  readonly progress: number;
+  /** All the work there is, when the tool knows it. */
+  readonly total?: number;
+}
+
 /** Per-call context the adapters hand to `execute`. */
 export interface ToolCallContext {
   signal?: AbortSignal;
+  /** Says the call is still at it. Absent where the host can't show it, so call `progress?.()`. */
+  progress?: (message: string, amount?: ToolProgress) => void;
 }
 
 export interface ToolDefinition<Input extends TObject = TObject, Details = unknown> {
@@ -434,6 +444,9 @@ function schemaAt(root: SchemaNode, pointer: string): SchemaNode | undefined {
 /**
  * Validates and runs a tool. Every adapter calls through here.
  *
+ * Progress is best effort: a line after the call settles goes nowhere, and a host that throws on
+ * one doesn't fail the call.
+ *
  * @param tool - Tool to run.
  * @param args - Arguments as received from the host.
  * @param context - Per-call context.
@@ -447,7 +460,23 @@ export async function invokeTool(
 ): Promise<ToolResult> {
   const checked = validateInput(tool, args);
   if (!checked.ok) throw new ToolInputError(checked.lines);
-  return await tool.execute(checked.value, context);
+  const { progress } = context;
+  if (!progress) return await tool.execute(checked.value, context);
+
+  let settled = false;
+  try {
+    return await tool.execute(checked.value, {
+      ...context,
+      progress(message, amount) {
+        if (settled) return;
+        try {
+          progress(sanitizeLine(message), amount);
+        } catch {}
+      },
+    });
+  } finally {
+    settled = true;
+  }
 }
 
 const LINE_BREAKING = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
