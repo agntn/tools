@@ -22,6 +22,7 @@ import {
   defineTool,
   indexTools,
   sanitizeLine,
+  sanitizeText,
   ToolDefinitionError,
   Type,
   validateInput,
@@ -324,6 +325,27 @@ describe("sanitizeLine", () => {
     const line = sanitizeLine("\u001B]".repeat(100_000));
     expect(performance.now() - start).toBeLessThan(1000);
     expect(line).toBe(Array.from({ length: 100_000 }, () => "]").join(" "));
+  });
+});
+
+describe("sanitizeText", () => {
+  const coder = String.fromCodePoint(0x1f469, 0x200d, 0x1f4bb);
+  const persian = "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645";
+
+  it("keeps lines, tabs, indents and joiners while dropping escapes and bidi tricks", () => {
+    const answer =
+      "Warsaw\r\n\tlat  52.2297\r  lon\u2028\u001B]8;;https://evil\u0007link\u001B]8;;\u0007" +
+      ` 21.0122\u009B31m\u202Eok\u007F\u2029${coder} ${persian}`;
+    expect(sanitizeText(answer)).toBe(
+      `Warsaw\n\tlat  52.2297\n  lon link 21.0122ok ${coder} ${persian}`,
+    );
+  });
+
+  it("stays linear on a run of unclosed OSC introducers", () => {
+    const start = performance.now();
+    const text = sanitizeText("\u001B]".repeat(100_000));
+    expect(performance.now() - start).toBeLessThan(1000);
+    expect(text).toBe("]".repeat(100_000));
   });
 });
 

@@ -26,6 +26,7 @@
 - One name, one tool on every surface (2026-10-06): `listTools`, `toAiTools`, `registerPiTools` and `registerOmpTools` throw `ToolDefinitionError` on a repeated name before a host sees the list, as `createMcpServer` and `createCli` already did. Before, one list with a name twice started no stdio server, while Pi and the AI SDK kept the last tool, and `listTools` listed both with `callTool` answering from the first. `callTool` still never throws; a transport such as `@nuxtjs/mcp-toolkit` gets the check from `listTools`.
 - h3-mcp adapter `@agntn/tools/h3` (2026-10-06): `toH3Tools(info, tools)` gives `defineMcpHandler` from h3-mcp 0.2.0 one definition per tool, each entry what `listTools` lists and each handler `callTool`, with the request signal and, for a call with `progressToken`, the same progress numbering as the `Server`. h3-mcp passes a plain JSON Schema through without validating, so the core validates; an unknown name gets h3-mcp's own JSON-RPC `Tool not found`. `listTools`, `callTool`, `toolAnnotations`, `errorResult` and `progressSteps` moved to `src/mcp-answers.ts`, which imports only SDK types, so `/h3` loads neither the SDK nor h3-mcp (`/mcp` re-exports them and still loads `Server`). A test compares an SDK client over Streamable HTTP through `app.fetch` with one on `createMcpServer`. Probed on a packed tarball in a clean consumer without `@modelcontextprotocol/server`: `serve` on a real port answers `initialize`, `tools/list`, a two-line validation error and a progress notification over SSE. `h3.d.mts` stays out of `typecheck:dist`: the h3 2.0.1 declarations import its optional peer `crossws`.
 - `ToolCallContext` carries `host` (2026-10-06, #49): the Pi and OMP adapters pass their own `ctx` for the call unchanged, MCP, h3, the AI SDK and the CLI leave it out. Typed `unknown`, so the core still imports neither host and an executor narrows it. Probed with model-driven sessions on the built `dist`: Pi 1.0.2 hands over `modelRegistry` with `getProviderAuth`, OMP 18.6.1 `modelRegistry.authStorage`, both with `sessionManager.getSessionId()`; OMP's `authStorage` there has no `getOAuthAccess` of its own, only an `oauth` field. agntn/web#261 can borrow the host login without a shim over `pi.registerTool`. OMP `renderers` take `renderCall` too, which replaces the adapter's call line and `describeCall` the way Pi's already did.
+- `sanitizeText` comes out of the root entry (2026-10-06, #52) beside `sanitizeLine`: the multi-line policy the CLI prints with, for a tool that sanitizes its whole answer and keeps indents and aligned columns. agntn/maps built its own `answer()` on `stripVTControlCharacters` with a 2000-character cap per line for exactly that, and can drop it after a release; `stripEscapes` needs no cap.
 - Open: a release with the Pi 1.x peer range (#15), progress (#41) and the h3-mcp adapter; the migrations themselves (hashes, books and `_template` wait on their spike branches).
 
 ## Decisions and evidence
@@ -64,8 +65,8 @@ Node.js >= 26, TypeScript (strict), pnpm.
 ## Structure
 
 ```
-src/index.ts  - core: defineTool, Type, validateInput, invokeTool, sanitizeLine
-src/escapes.ts - stripEscapes, Node's escape pattern in linear time (core and CLI)
+src/index.ts  - core: defineTool, Type, validateInput, invokeTool, sanitizeLine, sanitizeText
+src/escapes.ts - stripEscapes and sanitizeText, Node's escape pattern in linear time (core and CLI)
 src/mcp-answers.ts - listTools, callTool, toolAnnotations, errorResult, progressSteps; SDK types only
 src/mcp.ts    - createMcpServer, re-exports of mcp-answers
 src/h3.ts     - toH3Tools for h3-mcp
