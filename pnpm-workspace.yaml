@@ -8,6 +8,7 @@ allowBuilds:
   sharp: false
 
 minimumReleaseAgeExclude:
+  - "@agntn/*"
   - "@oh-my-pi/hashline@18.0.0"
   - "@oh-my-pi/omp-stats@18.0.0"
   - "@oh-my-pi/omptype@18.0.0"
