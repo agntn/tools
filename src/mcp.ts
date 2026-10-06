@@ -15,6 +15,7 @@ import {
   sanitizeLine,
   ToolInputError,
   wireSchema,
+  type ToolCallContext,
   type ToolDefinition,
 } from "./index.ts";
 
@@ -60,6 +61,56 @@ export function errorResult(...lines: readonly string[]): CallToolResult {
 }
 
 /**
+ * The entries `tools/list` answers with, in the order given.
+ *
+ * @param tools - Tools to list.
+ * @returns {Tool[]} Name, title, description, schema and annotations of each tool.
+ */
+export function listTools(tools: readonly ToolDefinition[]): Tool[] {
+  return tools.map((tool) => ({
+    name: tool.name,
+    title: tool.title,
+    description: tool.description,
+    inputSchema: wireSchema(tool) as Tool["inputSchema"],
+    annotations: toolAnnotations(tool),
+  }));
+}
+
+/**
+ * Answers one call as `tools/call` does and never throws, so every transport gives the same text.
+ *
+ * @param info - Server info; `name` is the word in the message for an unknown tool.
+ * @param tools - Tools to look the name up in.
+ * @param name - Tool name as the client sent it.
+ * @param args - Arguments as the client sent them; missing ones count as `{}`.
+ * @param context - Context for this call, such as the request's abort signal.
+ * @returns {Promise<CallToolResult>} The tool's text, or the sanitized error.
+ */
+export async function callTool(
+  info: Pick<McpServerInfo, "name">,
+  tools: readonly ToolDefinition[],
+  name: string,
+  args: unknown = {},
+  context: ToolCallContext = {},
+): Promise<CallToolResult> {
+  const tool = tools.find((candidate) => candidate.name === name);
+  if (!tool) return errorResult(`Unknown ${info.name} tool: ${JSON.stringify(name)}`);
+
+  try {
+    const result = await invokeTool(tool, args, context);
+    return {
+      content: result.content,
+      ...(result.isError === undefined ? {} : { isError: result.isError }),
+    };
+  } catch (error) {
+    if (error instanceof ToolInputError) return errorResult(...error.lines);
+    return errorResult(
+      `${tool.name} failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/**
  * Creates an unconnected MCP server exposing the tools.
  *
  * Built on the low-level `Server` of MCP SDK v2, which the SDK marks
@@ -76,43 +127,19 @@ export function errorResult(...lines: readonly string[]): CallToolResult {
  * @param info - Server name, version and optional title and website, sent to the client as given.
  * @param tools - Tools to serve.
  * @returns {Server} Unconnected MCP server.
+ * @throws {ToolDefinitionError} When two tools share a name.
  */
 export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinition[]): Server {
-  const byName = indexTools(tools);
+  indexTools(tools);
   const { name, version, title, websiteUrl } = info;
   const server = new Server({ name, version, title, websiteUrl }, { capabilities: { tools: {} } });
 
-  server.setRequestHandler("tools/list", () => ({
-    tools: tools.map((tool): Tool => ({
-      name: tool.name,
-      title: tool.title,
-      description: tool.description,
-      inputSchema: wireSchema(tool) as Tool["inputSchema"],
-      annotations: toolAnnotations(tool),
-    })),
-  }));
-
-  server.setRequestHandler("tools/call", async (request, ctx) => {
-    const tool = byName.get(request.params.name);
-    if (!tool) {
-      return errorResult(`Unknown ${name} tool: ${JSON.stringify(request.params.name)}`);
-    }
-
-    try {
-      const result = await invokeTool(tool, request.params.arguments ?? {}, {
-        signal: ctx.mcpReq.signal,
-      });
-      return {
-        content: result.content,
-        ...(result.isError === undefined ? {} : { isError: result.isError }),
-      };
-    } catch (error) {
-      if (error instanceof ToolInputError) return errorResult(...error.lines);
-      return errorResult(
-        `${tool.name} failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  });
+  server.setRequestHandler("tools/list", () => ({ tools: listTools(tools) }));
+  server.setRequestHandler("tools/call", (request, ctx) =>
+    callTool(info, tools, request.params.name, request.params.arguments, {
+      signal: ctx.mcpReq.signal,
+    }),
+  );
 
   return server;
 }
