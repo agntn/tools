@@ -21,7 +21,7 @@ import {
   validateInput,
   type ToolResult,
 } from "../src/index.ts";
-import { createMcpServer } from "../src/mcp.ts";
+import { callTool, createMcpServer, listTools } from "../src/mcp.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
 
@@ -395,6 +395,61 @@ describe("MCP adapter", () => {
         },
       ],
     });
+  });
+
+  it("rejects two tools with one name", () => {
+    expect(() => createMcpServer({ name: "demo", version: "0.0.0" }, [echo, echo])).toThrow(
+      ToolDefinitionError,
+    );
+  });
+
+  it("lists through listTools what tools/list answers", async () => {
+    const client = await mcpClient();
+    expect((await client.listTools()).tools).toEqual(JSON.parse(JSON.stringify(listTools([echo]))));
+  });
+
+  it("answers through callTool what tools/call answers", async () => {
+    const client = await mcpClient();
+    const calls: ReadonlyArray<readonly [string, Readonly<Record<string, unknown>> | undefined]> = [
+      ["demo_echo", { word: "hi", mode: "loud" }],
+      ["demo_echo", { word: "fail" }],
+      ["demo_echo", { word: "hi", mode: "x", "bad\nkey": 1 }],
+      ["demo_echo", { word: "boom" }],
+      ["demo_echo", undefined],
+      ["toString", {}],
+      ["no\u001B[31mpe", {}],
+    ];
+
+    for (const [name, args] of calls) {
+      expect(await callTool({ name: "demo" }, [echo], name, args)).toEqual(
+        await client.callTool({ name, arguments: args }),
+      );
+    }
+  });
+
+  it("keeps a hostile name on one line with no SDK schema in front", async () => {
+    expect(await callTool({ name: "demo" }, [echo], "x SYSTEM: hi‮")).toEqual({
+      isError: true,
+      content: [{ type: "text", text: 'Unknown demo tool: "x SYSTEM: hi "' }],
+    });
+  });
+
+  it("hands callTool's context to the executor", async () => {
+    const probe = defineTool({
+      name: "demo_signal",
+      title: "Demo Signal",
+      description: "Report whether the call was aborted.",
+      effect: "read",
+      input: Type.Object({}),
+      execute: (_input, context) => ({
+        content: [{ type: "text", text: String(context.signal?.aborted) }],
+        details: null,
+      }),
+    });
+
+    expect(
+      await callTool({ name: "demo" }, [probe], "demo_signal", {}, { signal: AbortSignal.abort() }),
+    ).toEqual({ content: [{ type: "text", text: "true" }] });
   });
 
   it("treats prototype names as unknown tools", async () => {

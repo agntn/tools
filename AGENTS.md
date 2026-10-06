@@ -21,6 +21,7 @@
 - `registerOmpTools` takes `loadMode` (2026-10-05, #8) and hands it to every tool in the list unchanged; left out, OMP keeps its `discoverable` default for extension tools. Probed in OMP 18.6.1 over RPC `get_state`: with `"essential"` the tool is in `dumpTools`, without the option or with `"discoverable"` it shows up only through `--tools`. ciphers and puzzles can register `essential` through the adapter again, and puzzles can drop its shim over `pi.registerTool`.
 - `registerPiTools` takes `describeCall` (2026-10-05, #12): with the host `Text` from `@earendil-works/pi-tui` it draws `<title> <summary>` in `toolTitle` and `muted`, as Pi's own `formatToolCallWithArgs` does. A `renderCall` of the same tool wins; `describeCall` without `Text` throws `ToolDefinitionError` at registration. Pi's loader aliases `@earendil-works/pi-tui` for every extension (0.84.2 and 1.0.2), so the extension needs no runtime dependency for it. A real `pi` 1.0.2 session drew `Lookup word marmot` for a scratch extension on the built `dist`.
 - `registerPiTools` takes `confirm` (2026-10-05, #13): a builder per tool name gets the validated input and returns `{ title, message }`, or `undefined` to skip the question. The adapter validates, asks through `ctx.ui.confirm` with the call's signal, then runs the tool; a "no" throws `<tool> was cancelled by the user. Do not retry unless the user asks again.`, no UI throws `<tool> needs interactive approval in Pi TUI or RPC mode`, and an abort during the dialog throws the abort reason. The title goes through `sanitizeLine`, the message through `sanitizeText` (moved from `cli.ts` to `escapes.ts`, the multi-line policy the CLI prints with), so a model's argument echoed into it can't carry escapes or bidi controls into the TUI. A `confirm` key off the tool list throws `ToolDefinitionError` at registration, since a typo would drop the gate silently. Probed on the built `dist` in Pi 1.0.2: RPC `confirmed: true` runs the call, `false` returns the cancel text as an error, `pi -p` refuses without asking. forges can move its six gated writes over (agntn/forges#207).
+- `listTools` and `callTool` come out of `/mcp` (2026-10-06, #7): what `tools/list` and `tools/call` answer, for a transport that isn't a `Server`, such as `@nuxtjs/mcp-toolkit` on a Docus `/mcp` route. `createMcpServer` is built on both, and a test compares each with the server's answer over a real client, so keys and puzzles can drop their hand copies (keys' `callTool` drops a returned `isError`). `callTool` never throws; a duplicate name still throws in `createMcpServer` at startup.
 - Open: a release with the Pi 1.x peer range (#15); the migrations themselves (hashes, books and `_template` wait on their spike branches).
 
 ## Decisions and evidence
@@ -60,7 +61,7 @@ Node.js >= 24, TypeScript (strict), pnpm.
 ```
 src/index.ts  - core: defineTool, Type, validateInput, invokeTool, sanitizeLine
 src/escapes.ts - stripEscapes, Node's escape pattern in linear time (core and CLI)
-src/mcp.ts    - createMcpServer
+src/mcp.ts    - createMcpServer, listTools, callTool
 src/pi.ts     - registerPiTools
 src/omp.ts    - registerOmpTools
 src/ai.ts     - toAiTools
