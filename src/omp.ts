@@ -38,6 +38,8 @@ export interface OmpResultView {
 export interface OmpRenderers {
   /** One-line summary of the arguments after the title. Sanitized by the adapter. */
   describeCall?(args: Readonly<Record<string, unknown>>): unknown;
+  /** Replaces the whole call line, `describeCall` included. It owns sanitizing what it draws. */
+  renderCall?: OmpToolDefinition["renderCall"];
   /** Short metadata after the badge, one entry per fact. Each entry is sanitized. */
   describeResult?(result: OmpResultView): readonly unknown[];
   /**
@@ -97,11 +99,12 @@ export function registerOmpTools(
       parameters: Type.Unsafe<Record<string, unknown>>(wireSchema(tool)),
       approval: APPROVAL[tool.effect],
       loadMode: options.loadMode,
-      async execute(_toolCallId, params, signal, onUpdate): Promise<AgentToolResult<unknown>> {
+      async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<unknown>> {
         // Returned as is: OMP reads `isError` from the object (`explicitError`).
-        return await invokeTool(tool, params, hostContext(signal, onUpdate));
+        return await invokeTool(tool, params, hostContext(signal, onUpdate, ctx));
       },
       renderCall(args, renderOptions, theme): Component {
+        if (renderers?.renderCall) return renderers.renderCall(args, renderOptions, theme);
         const summary = renderers?.describeCall ? sanitizeLine(renderers.describeCall(args)) : "";
         const title = theme.fg("accent", sanitizeLine(tool.title));
         return new Text(

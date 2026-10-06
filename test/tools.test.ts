@@ -389,6 +389,76 @@ describe("progress", () => {
   });
 });
 
+let seenHost: unknown;
+/* Keeps the host context it was handed, so a test can check what each surface passed. */
+const peek = defineTool({
+  name: "demo_peek",
+  title: "Demo Peek",
+  description: "Look at the host context.",
+  effect: "read",
+  input: Type.Object({}),
+  execute(_input, { host, progress }): ToolResult<null> {
+    seenHost = host;
+    progress?.("looking");
+    return {
+      content: [{ type: "text", text: `host ${host === undefined ? "off" : "on"}` }],
+      details: null,
+    };
+  },
+});
+
+describe("host context", () => {
+  const ctx = { modelRegistry: {}, sessionManager: { getSessionId: () => "session-1" } };
+
+  it("hands Pi's ctx to execute, with progress or without", async () => {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [peek]);
+    const [tool] = registered;
+    if (!tool) throw new Error("nothing registered");
+
+    seenHost = undefined;
+    await tool.execute("call-1", {}, undefined, undefined, ctx as never);
+    expect(seenHost).toBe(ctx);
+    seenHost = undefined;
+    await tool.execute("call-2", {}, undefined, () => {}, ctx as never);
+    expect(seenHost).toBe(ctx);
+  });
+
+  it("hands OMP's ctx to execute, with progress or without", async () => {
+    const registered: OmpToolDefinition[] = [];
+    const pi = {
+      typebox: { Type: { Unsafe: (document: unknown) => document } },
+      registerTool: (definition: OmpToolDefinition) => registered.push(definition),
+    };
+    registerOmpTools(pi as unknown as ExtensionAPI, [peek], {
+      Text: class {} as unknown as OmpToolOptions["Text"],
+    });
+    const [tool] = registered;
+    if (!tool) throw new Error("nothing registered");
+
+    seenHost = undefined;
+    await tool.execute("call-1", {}, undefined, undefined, ctx as never);
+    expect(seenHost).toBe(ctx);
+    seenHost = undefined;
+    await tool.execute("call-2", {}, undefined, () => {}, ctx as never);
+    expect(seenHost).toBe(ctx);
+  });
+
+  it("stays out of a host call without a ctx, MCP and the AI SDK", async () => {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [peek]);
+    const answers = [
+      await registered[0]?.execute("call-1", {}, undefined, undefined, undefined as never),
+      await callTool({ name: "demo" }, [peek], "demo_peek"),
+      await toAiTool(peek).execute?.({}, { toolCallId: "1", messages: [], context: {} }),
+    ];
+    expect(JSON.stringify(answers)).not.toContain("host on");
+    expect(JSON.stringify(answers).match(/host off/g)).toHaveLength(3);
+  });
+});
+
 const open: Array<{ close(): Promise<void> }> = [];
 afterEach(async () => {
   await Promise.all(open.splice(0).map((connection) => connection.close()));
@@ -771,6 +841,32 @@ describe("OMP adapter", () => {
         details: {},
       })),
     );
+  });
+
+  it("lets a renderCall of the same tool win over describeCall", () => {
+    const registered: OmpToolDefinition[] = [];
+    const pi = {
+      typebox: { Type: { Unsafe: (document: unknown) => document } },
+      registerTool: (definition: OmpToolDefinition) => registered.push(definition),
+    };
+    const own = { text: "own" };
+    const calls: unknown[][] = [];
+    registerOmpTools(pi as unknown as ExtensionAPI, [echo], {
+      Text: class {} as unknown as OmpToolOptions["Text"],
+      renderers: {
+        demo_echo: {
+          describeCall: () => "summary",
+          renderCall: (...args) => {
+            calls.push(args);
+            return own as never;
+          },
+        },
+      },
+    });
+    const options = { expanded: false, isPartial: true };
+
+    expect(registered[0]?.renderCall?.({ word: "hi" }, options, "theme" as never)).toBe(own);
+    expect(calls).toEqual([[{ word: "hi" }, options, "theme"]]);
   });
 
   it("keeps the spinner and the last line on a partial result", () => {
