@@ -22,7 +22,7 @@ docs/
 ├── server/routes/sitemap.xml.ts   # Docus sitemap plus the Vue pages it cannot see
 ├── public/                        # fonts, favicon.svg and the icons and manifest cut from it
 ├── content/index.md               # landing
-├── content/1.guide/               # getting started, defining tools, validation and errors, moving a package over
+├── content/1.guide/               # getting started, defining tools, validation and errors, the CLI, moving a package over
 └── content/2.hosts/               # the roster, one page per host
 ```
 

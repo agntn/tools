@@ -3,6 +3,7 @@ const NAV_ICONS: Record<string, string> = {
   "/guide": "i-lucide-book-open",
   "/guide/defining-tools": "i-lucide-wrench",
   "/guide/validation": "i-lucide-shield-check",
+  "/guide/cli": "i-lucide-square-terminal",
   "/guide/migrating": "i-lucide-layers",
   "/hosts": "i-lucide-table",
   "/hosts/mcp": "i-lucide-plug",
