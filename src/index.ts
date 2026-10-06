@@ -444,6 +444,9 @@ function schemaAt(root: SchemaNode, pointer: string): SchemaNode | undefined {
 /**
  * Validates and runs a tool. Every adapter calls through here.
  *
+ * Progress is best effort: a line after the call settles goes nowhere, and a host that throws on
+ * one doesn't fail the call.
+ *
  * @param tool - Tool to run.
  * @param args - Arguments as received from the host.
  * @param context - Per-call context.
@@ -465,7 +468,10 @@ export async function invokeTool(
     return await tool.execute(checked.value, {
       ...context,
       progress(message, amount) {
-        if (!settled) progress(sanitizeLine(message), amount);
+        if (settled) return;
+        try {
+          progress(sanitizeLine(message), amount);
+        } catch {}
       },
     });
   } finally {

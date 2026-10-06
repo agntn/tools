@@ -343,6 +343,19 @@ describe("progress", () => {
     expect(lines).toEqual(["warming up", "halfway", "backwards", "lost", "almost"]);
   });
 
+  it("keeps the answer when the host throws on an update", async () => {
+    const result = await invokeTool(
+      slow,
+      {},
+      {
+        progress: () => {
+          throw new Error("renderer gone");
+        },
+      },
+    );
+    expect(resultText(result)).toBe("progress on");
+  });
+
   it("is absent when nobody listens", async () => {
     expect(resultText(await invokeTool(slow, {}))).toBe("progress off");
   });
