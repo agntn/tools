@@ -56,6 +56,9 @@ const FLAG_WORD = /^[a-z0-9][a-z0-9.-]*$/;
 /** Flags every tool command answers itself. */
 const RESERVED_FLAGS = new Set(["help", "version", "json"]);
 
+/** Kinds whose value is the text itself: `enum` is string values only. */
+const TEXT_KINDS = new Set<FieldKind>(["string", "enum"]);
+
 /** A short flag: one letter, so a negative number never reads as one. */
 const SHORT_FLAG = /^[a-z]$/i;
 
@@ -258,7 +261,7 @@ function assertField(tool: ToolDefinition, field: Field, taken: boolean): void {
   if (field.stdin && field.kind !== "string") {
     throw new ToolDefinitionError(`${tool.name}: stdin property ${field.key} must be a string`);
   }
-  if (field.rest && field.kind !== "string") {
+  if (field.rest && !TEXT_KINDS.has(field.kind)) {
     throw new ToolDefinitionError(`${tool.name}: rest property ${field.key} must be a string`);
   }
 }

@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { commandName, createCli, normalizeArgv, type CliOptions } from "../src/cli.ts";
-import { defineTool, ToolDefinitionError, Type } from "../src/index.ts";
+import { defineTool, ToolDefinitionError, Type, type ToolDefinition } from "../src/index.ts";
 import { demoTools, DemoError, echo } from "./fixtures/demo.ts";
 
 const options: CliOptions = {
@@ -309,7 +309,7 @@ describe("CLI short flags and rest", () => {
       }),
     });
   const hints = { rest: "query", short: { provider: "p", limit: "n", exact: "x" } };
-  const cli = (tool = find(hints)): CliOptions => ({
+  const cli = (tool: ToolDefinition = find(hints)): CliOptions => ({
     ...options,
     tools: [tool],
     default: undefined,
@@ -359,6 +359,23 @@ describe("CLI short flags and rest", () => {
     expect(stdout).toContain("USAGE demo find [OPTIONS] <QUERY...>\n");
     expect(stdout).toContain("  -p, --provider=<provider>");
     expect(stdout).toContain("  -x, --[no-]exact");
+  });
+
+  it("joins the rest into a string enum and lets the core check it", async () => {
+    const city = defineTool({
+      name: "demo_city",
+      title: "City",
+      description: "x",
+      effect: "read",
+      input: Type.Object(
+        { name: Type.Enum(["New York", "Los Angeles"]) },
+        { additionalProperties: false },
+      ),
+      cli: { rest: "name" },
+      execute: ({ name }) => ({ content: [{ type: "text", text: name }], details: null }),
+    });
+    expect((await run(["city", "New", "York"], cli(city))).stdout).toBe("New York\n");
+    expect((await run(["city", "Paris"], cli(city))).exitCode).toBe(1);
   });
 
   it("rejects short and rest hints the schema cannot take", () => {
