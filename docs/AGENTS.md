@@ -35,7 +35,7 @@ pnpm build            # Cloudflare Workers output in .output/, content routes pr
 pnpm deploy           # build, then wrangler deploy to tools.agntn.dev
 ```
 
-Deployment: Workers Builds with root directory `docs`. It installs `docs/` and nothing else, and that's enough, because the library comes from `../src`. Nitro preset `cloudflare_module`. Nuxt Content wants a D1 binding named `DB`; `wrangler.jsonc` names the database `agntn-tools` and still needs its `database_id` once the database exists.
+Deployment: Workers Builds with root directory `docs`. It installs `docs/` and nothing else, and that's enough, because the library comes from `../src`. Node.js comes from `.node-version` at the repo root: Workers Builds never reads `engines`, and without that file the site quietly builds on the image default (24.18.0 on the last build without it). Nitro preset `cloudflare_module`. Nuxt Content wants a D1 binding named `DB`; `wrangler.jsonc` names the database `agntn-tools` and still needs its `database_id` once the database exists.
 
 `@agntn/tools` and its subpaths (`/mcp`, `/pi`, `/omp`, `/ai`) are aliases in `nuxt.config.ts` for the files in `../src`. The core and the adapters import `typebox`, `@modelcontextprotocol/server`, `@modelcontextprotocol/client` and `ai`, so each is a dependency here, pinned to the root's version, and listed in `vite.resolve.dedupe` and `vite.optimizeDeps.include`: Vite resolves a bare import in `../src` from the repo root upward, never from `docs/node_modules`. A new npm import under `src/` needs the same three entries or it breaks the deploy. None of `src/` imports `node:*`, which is what lets the browser run it; `test/tools.test.ts` in the root keeps it that way.
 

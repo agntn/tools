@@ -32,7 +32,7 @@ MCP wants an `inputSchema`. Pi wants `parameters` and a prompt snippet. OMP swap
 pnpm add @agntn/tools
 ```
 
-Node.js 24 or newer. Then add the hosts you serve. Each one is an optional peer.
+Node.js 26 or newer. Then add the hosts you serve. Each one is an optional peer.
 
 ## 🚀 First call
 
