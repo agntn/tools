@@ -277,6 +277,26 @@ describe("portability", () => {
   );
 });
 
+describe("one name, one tool", () => {
+  const twins = [echo, { ...echo, title: "Demo Echo Twin" }];
+  const registered: unknown[] = [];
+  const host = {
+    typebox: { Type: { Unsafe: (document: unknown) => document } },
+    registerTool: (definition: unknown) => registered.push(definition),
+  };
+  const Text = class {} as unknown as OmpToolOptions["Text"];
+
+  it.each([
+    ["listTools", () => listTools(twins)],
+    ["toAiTools", () => toAiTools(twins)],
+    ["registerPiTools", () => registerPiTools(host as unknown as PiExtensionAPI, twins)],
+    ["registerOmpTools", () => registerOmpTools(host as unknown as ExtensionAPI, twins, { Text })],
+  ])("%s refuses two tools with one name, as createMcpServer does", (_adapter, adapt) => {
+    expect(adapt).toThrow(new ToolDefinitionError("Duplicate tool name demo_echo"));
+    expect(registered).toEqual([]);
+  });
+});
+
 describe("sanitizeLine", () => {
   it("removes escapes and replaces every line-forging character", () => {
     const hostile = "a\u001B]0;evil\u0007b\u001B[31mc\nd e‮f\u0085g\u009B1mh";

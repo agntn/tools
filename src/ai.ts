@@ -9,6 +9,7 @@ import { jsonSchema, tool, type Tool } from "ai";
 import type { Static, TObject } from "typebox";
 
 import {
+  indexTools,
   invokeTool,
   resultText,
   ToolDefinitionError,
@@ -77,7 +78,9 @@ export function toAiTool<Input extends TObject, Details>(
  *
  * @param tools - Tools to convert.
  * @returns {Record<string, Tool>} AI SDK tools.
+ * @throws {ToolDefinitionError} When two tools share a name.
  */
 export function toAiTools(tools: readonly ToolDefinition[]): Record<string, Tool> {
+  indexTools(tools);
   return Object.fromEntries(tools.map((definition) => [definition.name, toAiTool(definition)]));
 }

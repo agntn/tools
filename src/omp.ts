@@ -16,6 +16,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent";
 
 import {
+  indexTools,
   invokeTool,
   sanitizeLine,
   wireSchema,
@@ -73,12 +74,14 @@ const APPROVAL: Record<ToolEffect, "read" | "write"> = {
  * @param pi - OMP extension API.
  * @param tools - Tools to register.
  * @param options - Host `Text`, optional load mode and renderers.
+ * @throws {ToolDefinitionError} When two tools share a name.
  */
 export function registerOmpTools(
   pi: ExtensionAPI,
   tools: readonly ToolDefinition[],
   options: OmpToolOptions,
 ): void {
+  indexTools(tools);
   const { Type } = pi.typebox;
   const { Text } = options;
 
