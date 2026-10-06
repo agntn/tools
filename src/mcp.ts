@@ -65,8 +65,10 @@ export function errorResult(...lines: readonly string[]): CallToolResult {
  *
  * @param tools - Tools to list.
  * @returns {Tool[]} Name, title, description, schema and annotations of each tool.
+ * @throws {ToolDefinitionError} When two tools share a name.
  */
 export function listTools(tools: readonly ToolDefinition[]): Tool[] {
+  indexTools(tools);
   return tools.map((tool) => ({
     name: tool.name,
     title: tool.title,

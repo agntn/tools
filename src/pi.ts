@@ -15,6 +15,7 @@ import type {
 
 import { sanitizeText } from "./escapes.ts";
 import {
+  indexTools,
   invokeTool,
   resultText,
   sanitizeLine,
@@ -73,18 +74,17 @@ export interface PiRenderers extends Readonly<
  * @param pi - Pi extension API.
  * @param tools - Tools to register.
  * @param options - Failure policy, host `Text`, renderers and questions.
- * @throws {ToolDefinitionError} When a tool has `describeCall` but no `Text` came with it, or
- *   `confirm` names a tool that isn't in the list.
+ * @throws {ToolDefinitionError} When two tools share a name, a tool has `describeCall` but no
+ *   `Text` came with it, or `confirm` names a tool that isn't in the list.
  */
 export function registerPiTools(
   pi: ExtensionAPI,
   tools: readonly ToolDefinition[],
   options: PiToolOptions = {},
 ): void {
+  const listed = indexTools(tools);
   const failures = options.failures ?? "throw";
-  const stray = Object.keys(options.confirm ?? {}).find(
-    (name) => !tools.some((t) => t.name === name),
-  );
+  const stray = Object.keys(options.confirm ?? {}).find((name) => !listed.has(name));
   if (stray !== undefined) {
     throw new ToolDefinitionError(
       `confirm names ${JSON.stringify(stray)}, which isn't in the tool list`,
