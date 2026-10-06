@@ -23,6 +23,7 @@ import {
   validateInput,
   type ToolDefinition,
 } from "./index.ts";
+import { hostContext } from "./updates.ts";
 
 type Component = ReturnType<NonNullable<PiToolDefinition["renderCall"]>>;
 
@@ -101,15 +102,9 @@ export function registerPiTools(
       ...(tool.snippet === undefined ? {} : { promptSnippet: tool.snippet }),
       ...(tool.guidelines === undefined ? {} : { promptGuidelines: [...tool.guidelines] }),
       parameters: tool.input,
-      async execute(
-        _toolCallId,
-        params,
-        signal,
-        _onUpdate,
-        ctx,
-      ): Promise<AgentToolResult<unknown>> {
+      async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<unknown>> {
         if (ask) await approve(tool, ask, params, signal, ctx);
-        const result = await invokeTool(tool, params, signal ? { signal } : {});
+        const result = await invokeTool(tool, params, hostContext(signal, onUpdate));
         if (result.isError && failures === "throw") throw new Error(resultText(result));
         return result;
       },

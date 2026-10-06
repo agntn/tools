@@ -124,6 +124,8 @@ export async function callTool(
  * clients that see structured output prefer it over `content` and would hide
  * the readable answer. Every fact a follow-up call needs belongs in the text.
  *
+ * A progress notification that fails to send goes to `onerror`, never to the tool.
+ *
  * @param info - Server name, version and optional title and website, sent to the client as given.
  * @param tools - Tools to serve.
  * @returns {Server} Unconnected MCP server.
@@ -135,11 +137,46 @@ export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinit
   const server = new Server({ name, version, title, websiteUrl }, { capabilities: { tools: {} } });
 
   server.setRequestHandler("tools/list", () => ({ tools: listTools(tools) }));
-  server.setRequestHandler("tools/call", (request, ctx) =>
-    callTool(info, tools, request.params.name, request.params.arguments, {
+  server.setRequestHandler("tools/call", (request, ctx) => {
+    const progressToken = ctx.mcpReq._meta?.progressToken;
+    const notify = (params: ProgressParams): void => {
+      ctx.mcpReq
+        .notify({ method: "notifications/progress", params: { progressToken, ...params } })
+        .catch((error: unknown) => {
+          server.onerror?.(error instanceof Error ? error : new Error(String(error)));
+        });
+    };
+    return callTool(info, tools, request.params.name, request.params.arguments, {
       signal: ctx.mcpReq.signal,
-    }),
-  );
+      ...(progressToken === undefined ? {} : { progress: progressSteps(notify) }),
+    });
+  });
 
   return server;
+}
+
+/** One `notifications/progress` without its token. */
+interface ProgressParams {
+  readonly progress: number;
+  readonly total?: number;
+  readonly message: string;
+}
+
+/**
+ * Numbers progress lines for MCP: a bare line counts one up, an amount that doesn't grow drops.
+ *
+ * @param notify - Sends one notification for the request.
+ * @returns {NonNullable<ToolCallContext["progress"]>} The callback for `execute`.
+ */
+function progressSteps(
+  notify: (params: ProgressParams) => void,
+): NonNullable<ToolCallContext["progress"]> {
+  let last: number | undefined;
+  return (message, amount) => {
+    const progress = amount?.progress ?? (last ?? 0) + 1;
+    if (!Number.isFinite(progress) || (last !== undefined && progress <= last)) return;
+    last = progress;
+    const total = amount?.total;
+    notify({ progress, ...(Number.isFinite(total) ? { total } : {}), message });
+  };
 }

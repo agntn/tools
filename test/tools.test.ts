@@ -19,6 +19,9 @@ import {
   ToolDefinitionError,
   Type,
   validateInput,
+  invokeTool,
+  resultText,
+  type ToolCallContext,
   type ToolResult,
 } from "../src/index.ts";
 import { callTool, createMcpServer, listTools } from "../src/mcp.ts";
@@ -308,6 +311,43 @@ function strings(length: number): string[] {
   return all;
 }
 
+let leftover: ToolCallContext["progress"];
+/* Reports five lines on the way and keeps its callback, so a test can call it after the answer. */
+const slow = defineTool({
+  name: "demo_slow",
+  title: "Demo Slow",
+  description: "Take a while and say so.",
+  effect: "read",
+  input: Type.Object({}),
+  execute(_input, { progress }): ToolResult<null> {
+    leftover = progress;
+    progress?.("warming\nup\u001B]0;x\u0007\u009B31m\u2028\u202E");
+    progress?.("halfway", { progress: 50, total: 100 });
+    progress?.("backwards", { progress: 10, total: 100 });
+    progress?.("lost", { progress: Number.NaN, total: Number.NaN });
+    progress?.("almost");
+    return {
+      content: [{ type: "text", text: `progress ${progress ? "on" : "off"}` }],
+      details: null,
+    };
+  },
+});
+
+describe("progress", () => {
+  it("cleans each line and goes quiet once the call settles", async () => {
+    const lines: string[] = [];
+    const result = await invokeTool(slow, {}, { progress: (message) => lines.push(message) });
+    leftover?.("too late");
+
+    expect(resultText(result)).toBe("progress on");
+    expect(lines).toEqual(["warming up", "halfway", "backwards", "lost", "almost"]);
+  });
+
+  it("is absent when nobody listens", async () => {
+    expect(resultText(await invokeTool(slow, {}))).toBe("progress off");
+  });
+});
+
 const open: Array<{ close(): Promise<void> }> = [];
 afterEach(async () => {
   await Promise.all(open.splice(0).map((connection) => connection.close()));
@@ -315,7 +355,7 @@ afterEach(async () => {
 
 async function mcpClient(): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const server = createMcpServer({ name: "demo", version: "0.0.0" }, [echo]);
+  const server = createMcpServer({ name: "demo", version: "0.0.0" }, [echo, slow]);
   const client = new Client({ name: "test", version: "0.0.0" });
   open.push(client, server);
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -405,7 +445,9 @@ describe("MCP adapter", () => {
 
   it("lists through listTools what tools/list answers", async () => {
     const client = await mcpClient();
-    expect((await client.listTools()).tools).toEqual(JSON.parse(JSON.stringify(listTools([echo]))));
+    expect((await client.listTools()).tools).toEqual(
+      JSON.parse(JSON.stringify(listTools([echo, slow]))),
+    );
   });
 
   it("answers through callTool what tools/call answers", async () => {
@@ -452,6 +494,29 @@ describe("MCP adapter", () => {
     ).toEqual({ content: [{ type: "text", text: "true" }] });
   });
 
+  it("sends progress to a client that asked, skipping a step back", async () => {
+    const client = await mcpClient();
+    const updates: unknown[] = [];
+    const result = await client.callTool(
+      { name: "demo_slow", arguments: {} },
+      { onprogress: (update) => updates.push(update) },
+    );
+
+    expect(result).toEqual({ content: [{ type: "text", text: "progress on" }] });
+    expect(updates).toEqual([
+      { progress: 1, message: "warming up" },
+      { progress: 50, total: 100, message: "halfway" },
+      { progress: 51, message: "almost" },
+    ]);
+  });
+
+  it("gives the tool no progress callback when the client didn't ask", async () => {
+    const client = await mcpClient();
+    expect(await client.callTool({ name: "demo_slow", arguments: {} })).toEqual({
+      content: [{ type: "text", text: "progress off" }],
+    });
+  });
+
   it("treats prototype names as unknown tools", async () => {
     const client = await mcpClient();
     expect(await client.callTool({ name: "toString", arguments: {} })).toEqual({
@@ -473,6 +538,15 @@ describe("AI SDK adapter", () => {
     expect(await tool.execute({ word: "hi" }, options)).toEqual({ word: "hi", text: "hi" });
     await expect(tool.execute({ word: "fail" }, options)).rejects.toThrow("cannot echo fail");
     expect(Object.keys(toAiTools([echo]))).toEqual(["demo_echo"]);
+  });
+
+  it("gives the tool no progress callback, since the AI SDK has nowhere to show it", async () => {
+    const tool = toAiTool(slow);
+    if (!tool.execute) throw new Error("tool not executable");
+    expect(await tool.execute({}, { toolCallId: "1", messages: [], context: {} })).toEqual({
+      details: null,
+      text: "progress off",
+    });
   });
 
   it("refuses details with a text field instead of overwriting it", async () => {
@@ -507,23 +581,80 @@ describe("OMP adapter", () => {
         this.text = text;
       }
     }
-    registerOmpTools(pi as unknown as ExtensionAPI, [echo, { ...echo, name: "demo_echo_too" }], {
-      Text: Text as unknown as OmpToolOptions["Text"],
-      loadMode,
-    });
+    registerOmpTools(
+      pi as unknown as ExtensionAPI,
+      [echo, { ...echo, name: "demo_echo_too" }, slow],
+      {
+        Text: Text as unknown as OmpToolOptions["Text"],
+        loadMode,
+      },
+    );
     return registered;
   }
 
   it("leaves the load mode to OMP unless asked", () => {
-    expect(register().map((tool) => tool.loadMode)).toEqual([undefined, undefined]);
+    expect(register().map((tool) => tool.loadMode)).toEqual([undefined, undefined, undefined]);
   });
 
   it("puts every tool in the load mode it is given", () => {
-    expect(register("essential").map((tool) => tool.loadMode)).toEqual(["essential", "essential"]);
+    expect(register("essential").map((tool) => tool.loadMode)).toEqual([
+      "essential",
+      "essential",
+      "essential",
+    ]);
     expect(register("discoverable").map((tool) => tool.loadMode)).toEqual([
       "discoverable",
       "discoverable",
+      "discoverable",
     ]);
+  });
+
+  /* The registered `demo_slow`. */
+  function slowTool(): OmpToolDefinition {
+    const tool = register().find((definition) => definition.name === "demo_slow");
+    if (!tool) throw new Error("demo_slow not registered");
+    return tool;
+  }
+
+  it("streams each progress line through onUpdate as a partial result", async () => {
+    const partials: unknown[] = [];
+    const result = await slowTool().execute(
+      "call-1",
+      {},
+      undefined,
+      (partial) => partials.push(partial),
+      {} as never,
+    );
+
+    expect(result).toEqual({ content: [{ type: "text", text: "progress on" }], details: null });
+    expect(partials).toEqual(
+      ["warming up", "halfway", "backwards", "lost", "almost"].map((text) => ({
+        content: [{ type: "text", text }],
+        details: {},
+      })),
+    );
+  });
+
+  it("keeps the spinner and the last line on a partial result", () => {
+    const theme = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+      styledSymbol: (name: string) => `[${name}]`,
+      spinnerFrames: ["-", "\\"],
+      format: { bracketLeft: "[", bracketRight: "]" },
+      sep: { dot: " · " },
+    };
+    const draw = (isPartial: boolean): unknown =>
+      slowTool().renderResult?.(
+        { content: [{ type: "text", text: "halfway\u001B[2J" }], details: {} },
+        { expanded: false, isPartial, spinnerFrame: 1 },
+        theme as never,
+        {},
+      );
+
+    expect(draw(true)).toEqual({ text: "\\ <accent>Demo Slow</accent> <dim>halfway</dim>" });
+    expect(draw(false)).toEqual({
+      text: "[status.done] <accent>Demo Slow</accent> <accent>[read]</accent>",
+    });
   });
 });
 
@@ -693,6 +824,33 @@ describe("Pi adapter", () => {
       },
     };
     await expect(call(ask, { word: "hi" }, ctx, controller.signal)).rejects.toThrow("call aborted");
+  });
+
+  it("streams each progress line through onUpdate, and none without it", async () => {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [slow]);
+    const [tool] = registered;
+    if (!tool) throw new Error("nothing registered");
+    const partials: unknown[] = [];
+
+    const streamed = await tool.execute(
+      "call-1",
+      {},
+      undefined,
+      (partial) => partials.push(partial),
+      {} as never,
+    );
+    const quiet = await tool.execute("call-2", {}, undefined, undefined, {} as never);
+
+    expect(streamed.content).toEqual([{ type: "text", text: "progress on" }]);
+    expect(quiet.content).toEqual([{ type: "text", text: "progress off" }]);
+    expect(partials).toEqual(
+      ["warming up", "halfway", "backwards", "lost", "almost"].map((text) => ({
+        content: [{ type: "text", text }],
+        details: {},
+      })),
+    );
   });
 
   it("refuses a question for a tool that isn't in the list", () => {

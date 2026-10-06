@@ -22,6 +22,7 @@ import {
   type ToolDefinition,
   type ToolEffect,
 } from "./index.ts";
+import { hostContext } from "./updates.ts";
 
 type TextComponent = typeof HostText;
 type Component = ReturnType<NonNullable<OmpToolDefinition["renderCall"]>>;
@@ -93,9 +94,9 @@ export function registerOmpTools(
       parameters: Type.Unsafe<Record<string, unknown>>(wireSchema(tool)),
       approval: APPROVAL[tool.effect],
       loadMode: options.loadMode,
-      async execute(_toolCallId, params, signal): Promise<AgentToolResult<unknown>> {
+      async execute(_toolCallId, params, signal, onUpdate): Promise<AgentToolResult<unknown>> {
         // Returned as is: OMP reads `isError` from the object (`explicitError`).
-        return await invokeTool(tool, params, signal ? { signal } : {});
+        return await invokeTool(tool, params, hostContext(signal, onUpdate));
       },
       renderCall(args, renderOptions, theme): Component {
         const summary = renderers?.describeCall ? sanitizeLine(renderers.describeCall(args)) : "";
@@ -109,23 +110,56 @@ export function registerOmpTools(
       renderResult(result, renderOptions, theme, args): Component {
         if (renderers?.renderResult)
           return renderers.renderResult(result, renderOptions, theme, args);
+        if (renderOptions.isPartial)
+          return new Text(progressLine(tool, result, renderOptions, theme), 0, 0);
         const icon = result.isError
           ? theme.styledSymbol("status.error", "error")
           : theme.styledSymbol("status.done", "success");
         const { bracketLeft, bracketRight } = theme.format;
         const badge = theme.fg("accent", `${bracketLeft}${APPROVAL[tool.effect]}${bracketRight}`);
-        const facts = result.isError
-          ? []
-          : (renderers?.describeResult?.(result).map(sanitizeLine).filter(Boolean) ?? []);
-        const meta = facts.length > 0 ? ` ${theme.fg("dim", facts.join(theme.sep.dot))}` : "";
+        const facts = result.isError ? [] : (renderers?.describeResult?.(result) ?? []);
         return new Text(
-          `${icon} ${theme.fg("accent", sanitizeLine(tool.title))} ${badge}${meta}`,
+          `${icon} ${theme.fg("accent", sanitizeLine(tool.title))} ${badge}${dimFacts(facts, theme)}`,
           0,
           0,
         );
       },
     });
   }
+}
+
+/**
+ * Status line while the call runs: the spinner, the title and its last progress line.
+ *
+ * @param tool - Tool being called.
+ * @param result - Partial result from `onUpdate`.
+ * @param options - Render options from the host.
+ * @param theme - Host theme.
+ * @returns {string} The styled line.
+ */
+function progressLine(
+  tool: ToolDefinition,
+  result: Readonly<{ content: readonly Readonly<{ type: string; text?: string }>[] }>,
+  options: ToolRenderResultOptions,
+  theme: Theme,
+): string {
+  const message = sanitizeLine(
+    result.content.findLast((block) => block.type === "text")?.text ?? "",
+  );
+  const title = theme.fg("accent", sanitizeLine(tool.title));
+  return `${callIcon(options, theme)} ${title}${message ? ` ${theme.fg("dim", message)}` : ""}`;
+}
+
+/**
+ * The `describeResult` facts after the badge, sanitized and dimmed; empty ones drop out.
+ *
+ * @param facts - Facts as the renderer gave them.
+ * @param theme - Host theme.
+ * @returns {string} The facts with a leading space, or nothing.
+ */
+function dimFacts(facts: readonly unknown[], theme: Theme): string {
+  const shown = facts.map(sanitizeLine).filter(Boolean);
+  return shown.length > 0 ? ` ${theme.fg("dim", shown.join(theme.sep.dot))}` : "";
 }
 
 /**
