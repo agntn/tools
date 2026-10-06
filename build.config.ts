@@ -7,6 +7,7 @@ export default defineBuildConfig({
       input: [
         "./src/index.ts",
         "./src/mcp.ts",
+        "./src/h3.ts",
         "./src/pi.ts",
         "./src/omp.ts",
         "./src/ai.ts",

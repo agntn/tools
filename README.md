@@ -87,6 +87,7 @@ The typo never reached `execute`. The model gets told what it did wrong and what
 | Host   | Adapter                                    | Peer                              |
 | ------ | ------------------------------------------ | --------------------------------- |
 | MCP    | `createMcpServer` from `@agntn/tools/mcp`  | `@modelcontextprotocol/server`    |
+| H3     | `toH3Tools` from `@agntn/tools/h3`         | `h3-mcp`                          |
 | Pi     | `registerPiTools` from `@agntn/tools/pi`   | `@earendil-works/pi-coding-agent` |
 | OMP    | `registerOmpTools` from `@agntn/tools/omp` | `@oh-my-pi/pi-coding-agent`       |
 | AI SDK | `toAiTool` from `@agntn/tools/ai`          | `ai`                              |
