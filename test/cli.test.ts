@@ -204,6 +204,7 @@ describe("CLI commands", () => {
           size: Type.Optional(Type.Union([Type.Enum(["all"]), Type.Integer()])),
           strict: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
           cursor: Type.Optional(Type.Null()),
+          level: Type.Optional(Type.Enum([1, 2])),
         },
         { additionalProperties: false },
       ),
@@ -222,6 +223,10 @@ describe("CLI commands", () => {
       (await picked("--limit", "null", "--size", "all", "--strict", "false", "--cursor", "null"))
         .stdout,
     ).toBe('{"limit":null,"size":"all","strict":false,"cursor":null}\n');
+    expect((await picked("--level", "2")).stdout).toBe('{"level":2}\n');
+    expect((await picked("--level", "2.0")).stderr).toBe(
+      "Invalid arguments at /level: must be one of 1, 2\n",
+    );
     for (const limit of ["1.5", "0x10"]) {
       const { stdout, stderr } = await picked("--limit", limit);
       expect(stdout).toBe("");

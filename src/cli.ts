@@ -769,16 +769,36 @@ function numberValue(integer: boolean, word: string): { value: number } | { erro
   return { error: integer ? "must be integer" : "must be number" };
 }
 
+/** Literal values a word can spell; an object or array never comes from one word. */
+const LITERAL_TYPES = new Set(["string", "number", "boolean"]);
+
+/** Types whose every value is a literal a word spells. */
+const TYPE_LITERALS = new Map<unknown, readonly unknown[]>([
+  ["null", [null]],
+  ["boolean", [true, false]],
+]);
+
+/**
+ * @param values - Every value the branch allows, from `const`, `enum` or its type.
+ * @param word - The word.
+ * @returns {{ value: unknown } | undefined} The literal the word spells exactly, if any.
+ */
+function literalValue(values: readonly unknown[], word: string): { value: unknown } | undefined {
+  const spelled = (item: unknown) =>
+    (item === null || LITERAL_TYPES.has(typeof item)) && String(item) === word;
+  return values.some(spelled) ? { value: values.find(spelled) } : undefined;
+}
+
 /**
  * @param branch - One branch of a union.
  * @param word - The word.
  * @returns {{ value: unknown } | undefined} What the branch reads the word as, if it takes it at all.
  */
 function branchValue(branch: SchemaNode, word: string): { value: unknown } | undefined {
-  if (branch.type === "null") return word === "null" ? { value: null } : undefined;
-  if (branch.type === "boolean") {
-    return word === "true" || word === "false" ? { value: word === "true" } : undefined;
-  }
+  if (Object.hasOwn(branch, "const")) return literalValue([branch.const], word);
+  if (Array.isArray(branch.enum)) return literalValue(branch.enum, word);
+  const literals = TYPE_LITERALS.get(branch.type);
+  if (literals !== undefined) return literalValue(literals, word);
   if (TYPE_KINDS.get(branch.type) !== "number") return undefined;
   const read = numberValue(branch.type === "integer", word);
   return "value" in read ? read : undefined;
