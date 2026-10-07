@@ -83,6 +83,8 @@ interface Field {
   readonly positional: boolean;
   /** Takes the words the other positionals leave, so it's always the last one. */
   readonly rest: boolean;
+  /** Items of a `rest` array, where each word stays one item instead of joining the others. */
+  readonly restItems: SchemaNode | undefined;
   readonly short: string | undefined;
   readonly stdin: boolean;
 }
@@ -153,6 +155,26 @@ function fieldKind(schema: SchemaNode): FieldKind {
   return TYPE_KINDS.get(schema.type) ?? "string";
 }
 
+/**
+ * @param schema - Property schema.
+ * @returns {SchemaNode | undefined} The items of an array of text, if the schema is one.
+ */
+function textItems(schema: SchemaNode): SchemaNode | undefined {
+  const { items } = schema;
+  if (schema.type !== "array" || typeof items !== "object" || items === null) return undefined;
+  if (Array.isArray(items)) return undefined;
+  return unionBranches(items as SchemaNode).every(takesText) ? (items as SchemaNode) : undefined;
+}
+
+/**
+ * @param branch - One branch of an item schema, unions opened.
+ * @returns {boolean} Whether it takes text only, so no word turns into a number or `null`.
+ */
+function takesText(branch: SchemaNode): boolean {
+  if (branch.type === "string" || typeof branch.const === "string") return true;
+  return Array.isArray(branch.enum) && branch.enum.every((value) => typeof value === "string");
+}
+
 interface CliHints {
   /** The `positional` hint with `rest` at the end. */
   readonly positional: readonly string[];
@@ -214,6 +236,7 @@ function toolFields(tool: ToolDefinition): Field[] {
       kind: fieldKind(properties[key] ?? {}),
       positional: positional.includes(key),
       rest: rest.includes(key),
+      restItems: rest.includes(key) ? textItems(properties[key] ?? {}) : undefined,
       short: Object.hasOwn(short, key) ? short[key] : undefined,
       stdin: stdin.includes(key),
     };
@@ -268,11 +291,22 @@ function assertField(tool: ToolDefinition, field: Field, taken: boolean): void {
       `${tool.name}: boolean property ${field.key} cannot be positional`,
     );
   }
+  assertTextHints(tool, field);
+}
+
+/**
+ * @param tool - Tool the field belongs to.
+ * @param field - Field to check.
+ * @throws {ToolDefinitionError} When `stdin` or `rest` sits on a property that takes no text.
+ */
+function assertTextHints(tool: ToolDefinition, field: Field): void {
   if (field.stdin && field.kind !== "string") {
     throw new ToolDefinitionError(`${tool.name}: stdin property ${field.key} must be a string`);
   }
-  if (field.rest && !TEXT_KINDS.has(field.kind)) {
-    throw new ToolDefinitionError(`${tool.name}: rest property ${field.key} must be a string`);
+  if (field.rest && field.restItems === undefined && !TEXT_KINDS.has(field.kind)) {
+    throw new ToolDefinitionError(
+      `${tool.name}: rest property ${field.key} must be a string or an array of strings`,
+    );
   }
 }
 
@@ -391,9 +425,12 @@ function emptyRecord<T>(): Record<string, T> {
   return Object.create(null) as Record<string, T>;
 }
 
+/** A raw value: a word, `true`/`false` for a boolean, the words of a `rest` array. */
+type RawValue = string | boolean | readonly string[];
+
 interface ParsedWords {
-  /** Raw values by property: a string, or `true`/`false` for a boolean. */
-  readonly values: Readonly<Record<string, string | boolean>>;
+  /** Raw values by property, before {@link toolInput} reads them. */
+  readonly values: Readonly<Record<string, RawValue>>;
   readonly json: boolean;
   /** `--help` or `-h` before any `--`; a value or a word after `--` is not one. */
   readonly help: boolean;
@@ -445,7 +482,7 @@ function parseWords(
     tokens: true,
   });
 
-  const values = emptyRecord<string | boolean>();
+  const values = emptyRecord<RawValue>();
   const errors = refused.map((word) => unknownOption(options, word));
   const flags = new Set<string>();
   for (const token of tokens) {
@@ -608,18 +645,21 @@ function shortField(
 /**
  * @param fields - The command's fields.
  * @param positionals - Positional words in order.
- * @returns {Record<string, string>} Each positional property with its word, `rest` with the others.
+ * @returns {Record<string, RawValue>} Each positional property with its word, `rest` with the
+ *   others: joined by spaces for a string, one item per word for an array, empty when required.
  */
 function positionalValues(
   fields: readonly Field[],
   positionals: readonly string[],
-): Record<string, string> {
+): Record<string, RawValue> {
   const takes = fields.filter((field) => field.positional);
   return Object.assign(
-    emptyRecord<string>(),
+    emptyRecord<RawValue>(),
     Object.fromEntries(
-      takes.flatMap((field, index) => {
+      takes.flatMap((field, index): Array<[string, RawValue]> => {
         const words = field.rest ? positionals.slice(index) : positionals.slice(index, index + 1);
+        if (field.restItems !== undefined)
+          return words.length > 0 || field.required ? [[field.key, words]] : [];
         return words.length === 0 ? [] : [[field.key, words.join(" ")]];
       }),
     ),
@@ -851,7 +891,7 @@ function wordValue(schema: SchemaNode, word: string): unknown {
  * @param raw - What {@link parseWords} read for it.
  * @returns {{ value: unknown } | { error: string }} The value, or why there is none.
  */
-function fieldValue(field: Field, raw: unknown): { value: unknown } | { error: string } {
+function fieldValue(field: Field, raw: string | boolean): { value: unknown } | { error: string } {
   if (field.stdin && raw === "-") {
     const text = readStdin();
     return text === undefined ? { error: "stdin is not UTF-8 text" } : { value: text };
@@ -869,19 +909,17 @@ function fieldValue(field: Field, raw: unknown): { value: unknown } | { error: s
 
 /**
  * Builds the tool input from parsed arguments. Numbers are read as decimals,
- * booleans come from the flag, objects and arrays are JSON, any other word is
- * its first reading the schema accepts, and nothing is bent to fit it:
- * {@link invokeTool} validates as on every surface.
+ * booleans come from the flag, objects and arrays are JSON (a `rest` array
+ * takes its words instead), any other word is its first reading the schema
+ * accepts, and nothing is bent to fit it: {@link invokeTool} validates as on
+ * every surface.
  *
  * @param fields - The command's fields.
  * @param values - Raw values by property, from {@link parseWords}.
  * @returns {unknown} The input object.
  * @throws {ToolInputError} When a number or a JSON value does not read.
  */
-function toolInput(
-  fields: readonly Field[],
-  values: Readonly<Record<string, string | boolean>>,
-): unknown {
+function toolInput(fields: readonly Field[], values: Readonly<Record<string, RawValue>>): unknown {
   const input = emptyRecord<unknown>();
   const fromStdin = fields.filter((field) => field.stdin && values[field.key] === "-");
   if (fromStdin.length > 1) {
@@ -893,7 +931,10 @@ function toolInput(
   for (const field of fields) {
     const raw = values[field.key];
     if (raw === undefined) continue;
-    const read = fieldValue(field, raw);
+    const read =
+      typeof raw === "object"
+        ? { value: raw.map((word) => wordValue(field.restItems ?? {}, word)) }
+        : fieldValue(field, raw);
     if ("error" in read) errors.push(`Invalid arguments at /${field.key}: ${read.error}`);
     else input[field.key] = read.value;
   }
