@@ -407,6 +407,24 @@ describe("CLI commands", () => {
     };
     expect(normalizeArgv(replaced, ["len"])).toEqual(["echo", "len"]);
   });
+
+  it("prints nothing for no content blocks but a line for an empty text", async () => {
+    const quiet = defineTool({
+      name: "demo_quiet",
+      title: "Quiet",
+      description: "Say nothing, or an empty line.",
+      effect: "read",
+      input: Type.Object({ line: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+      execute: ({ line }) => ({
+        content: line === true ? [{ type: "text", text: "" }] : [],
+        details: { line: line === true },
+      }),
+    });
+    const cli: CliOptions = { ...options, commands: [quiet] };
+    expect(await run(["quiet"], cli)).toEqual({ stdout: "", stderr: "", exitCode: undefined });
+    expect((await run(["quiet", "--line"], cli)).stdout).toBe("\n");
+    expect((await run(["quiet", "--json"], cli)).stdout).toBe('{\n  "line": false\n}\n');
+  });
 });
 
 describe("CLI short flags and rest", () => {
@@ -774,6 +792,17 @@ describe("CLI process", () => {
     expect([answer.stdout, answer.stderr, answer.status]).toEqual([
       "",
       "Invalid arguments at /text: stdin is not UTF-8 text\n",
+      1,
+    ]);
+  });
+
+  it("leaves stdout to a package command that answers with no content", () => {
+    const answer = spawnSync(process.execPath, [fixture, "gzip-magic"]);
+    expect([[...answer.stdout], answer.stderr.length, answer.status]).toEqual([[0x1f, 0x8b], 0, 0]);
+    const json = spawnCli(["gzip-magic", "--json"]);
+    expect([json.stdout, json.stderr, json.status]).toEqual([
+      "",
+      'Invalid arguments: unknown option "--json"; takes no options\n',
       1,
     ]);
   });

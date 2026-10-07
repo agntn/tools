@@ -88,3 +88,16 @@ export const measure = defineTool({
 });
 
 export const demoTools = [echo, measure];
+
+export const gzipMagic = defineTool({
+  name: "demo_gzip_magic",
+  title: "Demo Gzip Magic",
+  description: "Write the gzip magic bytes.",
+  effect: "read",
+  input: Type.Object({}, { additionalProperties: false }),
+  cli: { json: false },
+  execute(): ToolResult<null> {
+    process.stdout.write(Uint8Array.of(0x1f, 0x8b));
+    return { content: [], details: null };
+  },
+});
