@@ -11,6 +11,8 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
+import { Value } from "typebox/value";
+
 import { sanitizeText } from "./escapes.ts";
 import {
   indexTools,
@@ -805,15 +807,6 @@ function branchValue(branch: SchemaNode, word: string): { value: unknown } | und
 }
 
 /**
- * @param branch - One branch of a union.
- * @param word - The word.
- * @returns {boolean} Whether the branch takes the word as text: any string, or one its enum lists.
- */
-function takesText(branch: SchemaNode, word: string): boolean {
-  return Array.isArray(branch.enum) ? branch.enum.includes(word) : branch.type === "string";
-}
-
-/**
  * @param schema - Property schema.
  * @returns {readonly SchemaNode[]} Its branches, with nested combinators and type lists opened.
  */
@@ -825,20 +818,22 @@ function unionBranches(schema: SchemaNode): readonly SchemaNode[] {
 }
 
 /**
- * A union keeps a word some branch takes as text, else reads it through the first branch that takes it.
+ * The first reading of the word the schema accepts: the text itself, then what each branch spells.
  *
  * @param schema - Property schema, a union or not.
  * @param word - The word.
  * @returns {unknown} The value, or the word for validation to judge.
  */
-function unionValue(schema: SchemaNode, word: string): unknown {
-  const branches = unionBranches(schema);
-  if (branches.some((branch) => takesText(branch, word))) return word;
-  for (const branch of branches) {
-    const read = branchValue(branch, word);
-    if (read !== undefined) return read.value;
-  }
-  return word;
+function wordValue(schema: SchemaNode, word: string): unknown {
+  const readings = [
+    word,
+    ...unionBranches(schema).flatMap((branch) => {
+      const read = branchValue(branch, word);
+      return read === undefined ? [] : [read.value];
+    }),
+  ];
+  const index = readings.findIndex((value) => Value.Check(schema, value));
+  return index === -1 ? word : readings[index];
 }
 
 /**
@@ -853,7 +848,7 @@ function fieldValue(field: Field, raw: unknown): { value: unknown } | { error: s
   }
   if (typeof raw !== "string") return { value: raw };
   if (field.kind === "number") return numberValue(field.schema.type === "integer", raw);
-  if (field.kind === "string") return { value: unionValue(field.schema, raw) };
+  if (field.kind === "string") return { value: wordValue(field.schema, raw) };
   if (field.kind !== "json") return { value: raw };
   try {
     return { value: JSON.parse(raw) as unknown };
@@ -864,9 +859,9 @@ function fieldValue(field: Field, raw: unknown): { value: unknown } | { error: s
 
 /**
  * Builds the tool input from parsed arguments. Numbers are read as decimals,
- * booleans come from the flag, objects and arrays are JSON, a union word goes
- * to a branch that takes it as written, and nothing is bent to fit the schema:
- * {@link invokeTool} validates it as on every surface.
+ * booleans come from the flag, objects and arrays are JSON, any other word is
+ * its first reading the schema accepts, and nothing is bent to fit it:
+ * {@link invokeTool} validates as on every surface.
  *
  * @param fields - The command's fields.
  * @param values - Raw values by property, from {@link parseWords}.
