@@ -3,6 +3,7 @@
  */
 
 import { defineTool, Type, type ToolResult } from "../../src/index.ts";
+import type { McpServerInfo } from "../../src/mcp-answers.ts";
 
 /** Escape sequences, C1, bidi, CRLF, a line separator and a ZWJ emoji, built without raw bytes in this file. */
 const hostileText = [
@@ -88,6 +89,16 @@ export const measure = defineTool({
 });
 
 export const demoTools = [echo, measure];
+
+/** What `demo mcp` says about itself when the package hands it more than the help line. */
+export const serverInfo = {
+  name: "demo",
+  version: "1.2.3",
+  title: "Demo",
+  description: "Echoes words and measures text, loudly when asked.",
+  icons: [{ src: "https://demo.example/icon.svg", mimeType: "image/svg+xml", sizes: ["any"] }],
+  websiteUrl: "https://demo.example",
+} satisfies McpServerInfo;
 
 export const gzipMagic = defineTool({
   name: "demo_gzip_magic",
