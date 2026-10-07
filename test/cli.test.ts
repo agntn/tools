@@ -799,6 +799,12 @@ describe("CLI process", () => {
   it("leaves stdout to a package command that answers with no content", () => {
     const answer = spawnSync(process.execPath, [fixture, "gzip-magic"]);
     expect([[...answer.stdout], answer.stderr.length, answer.status]).toEqual([[0x1f, 0x8b], 0, 0]);
+    const json = spawnCli(["gzip-magic", "--json"]);
+    expect([json.stdout, json.stderr, json.status]).toEqual([
+      "",
+      'Invalid arguments: unknown option "--json"; takes no options\n',
+      1,
+    ]);
   });
 
   it("prints usage and errors without colors into a pipe", () => {

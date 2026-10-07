@@ -35,7 +35,7 @@ export interface CliOptions {
    * no MCP, Pi, OMP or AI SDK host sees them. One whose command name matches
    * a generated command, `mcp` included, takes its place. Bytes are the
    * command's own business: it reads `-` from stdin itself in `execute`, and
-   * writes to stdout itself, answering with no content so the CLI prints nothing.
+   * writes to stdout itself, answering with no content and `cli.json: false`.
    */
   readonly commands?: readonly ToolDefinition[];
   /** Command for an empty command line. */
@@ -975,7 +975,7 @@ function toolCommand(tool: ToolDefinition): Command {
     aliases: (tool.cli?.aliases ?? []).map((alias) => commandWord(tool.name, alias)),
     summary: tool.cli?.description ?? summary,
     fields,
-    json: true,
+    json: tool.cli?.json !== false,
     async run(words) {
       const result = await invokeTool(tool, toolInput(fields, words.values));
       if (result.isError === true) {

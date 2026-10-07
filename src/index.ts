@@ -71,6 +71,8 @@ export interface ToolCliHints {
   readonly short?: Readonly<Record<string, string>>;
   /** String properties that read stdin when given as `-`. */
   readonly stdin?: readonly string[];
+  /** `false` takes `--json` away, for a command that writes its own bytes to stdout. */
+  readonly json?: boolean;
 }
 
 /** How far a long call has come, for hosts that draw it. */
