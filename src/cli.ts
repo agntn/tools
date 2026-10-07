@@ -758,16 +758,56 @@ const DECIMAL_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
 /**
  * Reads a number word as written: `Number` alone takes `0x10`, and an empty word as zero.
  *
- * @param field - Field the word belongs to, of kind `number`.
+ * @param integer - Whether the schema wants an `integer` rather than any `number`.
  * @param word - The word.
  * @returns {{ value: number } | { error: string }} The number, or the core's type error.
  */
-function numberValue(field: Field, word: string): { value: number } | { error: string } {
-  const integer = field.schema.type === "integer";
+function numberValue(integer: boolean, word: string): { value: number } | { error: string } {
   const value = Number(word);
   const written = (integer ? DECIMAL_INTEGER : DECIMAL_NUMBER).test(word);
   if (written && Number.isFinite(value)) return { value };
   return { error: integer ? "must be integer" : "must be number" };
+}
+
+/**
+ * @param branch - One branch of a union.
+ * @param word - The word.
+ * @returns {{ value: unknown } | undefined} What the branch reads the word as, if it takes it at all.
+ */
+function branchValue(branch: SchemaNode, word: string): { value: unknown } | undefined {
+  if (branch.type === "null") return word === "null" ? { value: null } : undefined;
+  if (branch.type === "boolean") {
+    return word === "true" || word === "false" ? { value: word === "true" } : undefined;
+  }
+  if (TYPE_KINDS.get(branch.type) !== "number") return undefined;
+  const read = numberValue(branch.type === "integer", word);
+  return "value" in read ? read : undefined;
+}
+
+/**
+ * @param branch - One branch of a union.
+ * @param word - The word.
+ * @returns {boolean} Whether the branch takes the word as text: any string, or one its enum lists.
+ */
+function takesText(branch: SchemaNode, word: string): boolean {
+  return Array.isArray(branch.enum) ? branch.enum.includes(word) : branch.type === "string";
+}
+
+/**
+ * A union keeps a word some branch takes as text, else reads it through the first branch that takes it.
+ *
+ * @param schema - Property schema, a union or not.
+ * @param word - The word.
+ * @returns {unknown} The value, or the word for validation to judge.
+ */
+function unionValue(schema: SchemaNode, word: string): unknown {
+  const branches = Array.isArray(schema.anyOf) ? (schema.anyOf as readonly SchemaNode[]) : [];
+  if (branches.some((branch) => takesText(branch, word))) return word;
+  for (const branch of branches) {
+    const read = branchValue(branch, word);
+    if (read !== undefined) return read.value;
+  }
+  return word;
 }
 
 /**
@@ -781,7 +821,8 @@ function fieldValue(field: Field, raw: unknown): { value: unknown } | { error: s
     return text === undefined ? { error: "stdin is not UTF-8 text" } : { value: text };
   }
   if (typeof raw !== "string") return { value: raw };
-  if (field.kind === "number") return numberValue(field, raw);
+  if (field.kind === "number") return numberValue(field.schema.type === "integer", raw);
+  if (field.kind === "string") return { value: unionValue(field.schema, raw) };
   if (field.kind !== "json") return { value: raw };
   try {
     return { value: JSON.parse(raw) as unknown };
@@ -792,8 +833,9 @@ function fieldValue(field: Field, raw: unknown): { value: unknown } | { error: s
 
 /**
  * Builds the tool input from parsed arguments. Numbers are read as decimals,
- * booleans come from the flag, objects and arrays are JSON, and nothing is
- * bent to fit the schema: {@link invokeTool} validates it as on every surface.
+ * booleans come from the flag, objects and arrays are JSON, a union word goes
+ * to a branch that takes it as written, and nothing is bent to fit the schema:
+ * {@link invokeTool} validates it as on every surface.
  *
  * @param fields - The command's fields.
  * @param values - Raw values by property, from {@link parseWords}.

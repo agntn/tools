@@ -191,6 +191,42 @@ describe("CLI commands", () => {
     }
   });
 
+  it("reads a word for a union the way some branch takes it", async () => {
+    const pick = defineTool({
+      name: "demo_pick",
+      title: "Pick",
+      description: "Pick a limit.",
+      effect: "read",
+      input: Type.Object(
+        {
+          limit: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+          label: Type.Optional(Type.Union([Type.Integer(), Type.String()])),
+          size: Type.Optional(Type.Union([Type.Enum(["all"]), Type.Integer()])),
+          strict: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+        },
+        { additionalProperties: false },
+      ),
+      execute: (input) => ({
+        content: [{ type: "text", text: JSON.stringify(input) }],
+        details: null,
+      }),
+    });
+    const cli = { ...options, tools: [pick], default: undefined, fallback: undefined };
+    const picked = async (...argv: readonly string[]) => run(["pick", ...argv], cli);
+
+    expect((await picked("--limit", "2", "--label", "2", "--size", "3")).stdout).toBe(
+      '{"limit":2,"label":"2","size":3}\n',
+    );
+    expect((await picked("--limit", "null", "--size", "all", "--strict", "false")).stdout).toBe(
+      '{"limit":null,"size":"all","strict":false}\n',
+    );
+    for (const limit of ["1.5", "0x10"]) {
+      const { stdout, stderr } = await picked("--limit", limit);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("Invalid arguments at /limit: must be integer\n");
+    }
+  });
+
   it("fails with the core's validation lines", async () => {
     expect(await run(["echo", "a.b", "--times", "9"])).toEqual({
       stdout: "",
