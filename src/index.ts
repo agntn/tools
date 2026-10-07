@@ -98,7 +98,7 @@ export interface ToolCallContext {
   signal?: AbortSignal;
   /** Says the call is still at it. Absent where the host can't show it, so call `progress?.()`. */
   progress?: (message: string, amount?: ToolProgress) => void;
-  /** The host's own `ctx`: Pi and OMP pass it, other surfaces don't. Narrow it yourself. */
+  /** Pi's or OMP's own `ctx`, the CLI's `CliHost`, nothing elsewhere. Narrow it yourself. */
   host?: unknown;
 }
 
