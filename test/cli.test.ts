@@ -5,8 +5,20 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { commandName, createCli, normalizeArgv, type CliOptions } from "../src/cli.ts";
-import { defineTool, ToolDefinitionError, Type, type ToolDefinition } from "../src/index.ts";
+import {
+  commandName,
+  createCli,
+  normalizeArgv,
+  type CliHost,
+  type CliOptions,
+} from "../src/cli.ts";
+import {
+  defineTool,
+  invokeTool,
+  ToolDefinitionError,
+  Type,
+  type ToolDefinition,
+} from "../src/index.ts";
 import { demoTools, DemoError, echo, serverInfo } from "./fixtures/demo.ts";
 
 const options: CliOptions = {
@@ -425,6 +437,58 @@ describe("CLI commands", () => {
     expect(await run(["quiet"], cli)).toEqual({ stdout: "", stderr: "", exitCode: undefined });
     expect((await run(["quiet", "--line"], cli)).stdout).toBe("\n");
     expect((await run(["quiet", "--json"], cli)).stdout).toBe('{\n  "line": false\n}\n');
+  });
+
+  it("tells a command whether --json asked for the details", async () => {
+    const rows = defineTool({
+      name: "demo_rows",
+      title: "Rows",
+      description: "Stream rows, or answer them as details.",
+      effect: "read",
+      input: Type.Object({ raw: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+      execute({ raw }, { host }) {
+        const json = (host as CliHost | undefined)?.json === true;
+        if (raw === true && json) {
+          return {
+            content: [{ type: "text", text: "--raw writes bytes, --json can't follow" }],
+            details: null,
+            isError: true,
+          };
+        }
+        if (json) return { content: [], details: { rows: ["a", "b"] } };
+        process.stdout.write("a\nb\n");
+        return { content: [], details: null };
+      },
+    });
+    const cli: CliOptions = { ...options, commands: [rows] };
+    expect((await run(["rows"], cli)).stdout).toBe("a\nb\n");
+    expect((await run(["rows", "--json"], cli)).stdout).toBe(
+      '{\n  "rows": [\n    "a",\n    "b"\n  ]\n}\n',
+    );
+    expect(await run(["rows", "--raw", "--json"], cli)).toEqual({
+      stdout: "",
+      stderr: "--raw writes bytes, --json can't follow\n",
+      exitCode: 1,
+    });
+  });
+
+  it("hands a generated command the same host and a call off the CLI none", async () => {
+    const seen: unknown[] = [];
+    const peek = defineTool({
+      name: "demo_peek",
+      title: "Peek",
+      description: "Look at the host.",
+      effect: "read",
+      input: Type.Object({}),
+      execute(_input, { host }) {
+        seen.push(host);
+        return { content: [], details: null };
+      },
+    });
+    await run(["peek"], { ...options, tools: [...demoTools, peek] });
+    await run(["peek", "--json"], { ...options, tools: [...demoTools, peek] });
+    await invokeTool(peek, {});
+    expect(seen).toEqual([{ cli: true, json: false }, { cli: true, json: true }, undefined]);
   });
 });
 

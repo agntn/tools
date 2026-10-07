@@ -37,6 +37,7 @@ export interface CliOptions {
    * a generated command, `mcp` included, takes its place. Bytes are the
    * command's own business: it reads `-` from stdin itself in `execute`, and
    * writes to stdout itself, answering with no content and `cli.json: false`.
+   * A command that prints rows as they land reads `--json` off its {@link CliHost}.
    */
   readonly commands?: readonly ToolDefinition[];
   /** Command for an empty command line. */
@@ -50,6 +51,13 @@ export interface CliOptions {
    * code 1; any other error keeps its stack trace.
    */
   readonly expected?: (error: unknown) => boolean;
+}
+
+/** What a CLI command finds in `host`: narrow to it and look at `json` before writing a byte. */
+export interface CliHost {
+  readonly cli: true;
+  /** `--json` was given, so the details are the answer and stdout stays theirs. */
+  readonly json: boolean;
 }
 
 /** A flag `--<flag>` can spell: not empty, no `=`, no space or control, not starting with `-`. */
@@ -978,7 +986,8 @@ function toolCommand(tool: ToolDefinition): Command {
     fields,
     json: tool.cli?.json !== false,
     async run(words) {
-      const result = await invokeTool(tool, toolInput(fields, words.values));
+      const host: CliHost = { cli: true, json: words.json };
+      const result = await invokeTool(tool, toolInput(fields, words.values), { host });
       if (result.isError === true) {
         writeLine("stderr", sanitizeText(resultText(result)));
         process.exitCode = 1;
