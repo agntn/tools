@@ -645,6 +645,18 @@ describe("CLI short flags and rest", () => {
       expect(() => createCli(cli(search(Type.Array(Type.Array(Type.String())))))).toThrow(
         "demo_search: rest property words must be a string or an array of strings",
       );
+      expect(() =>
+        createCli(cli(search(Type.Array(Type.Union([Type.Integer(), Type.Null()]))))),
+      ).toThrow("demo_search: rest property words must be a string or an array of strings");
+      expect(() =>
+        createCli(
+          cli(
+            search(
+              Type.Array(Type.Union([Type.String({ maxLength: 3 }), Type.Enum(["long word"])])),
+            ),
+          ),
+        ),
+      ).not.toThrow();
     });
   });
 

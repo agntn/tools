@@ -163,7 +163,16 @@ function textItems(schema: SchemaNode): SchemaNode | undefined {
   const { items } = schema;
   if (schema.type !== "array" || typeof items !== "object" || items === null) return undefined;
   if (Array.isArray(items)) return undefined;
-  return TEXT_KINDS.has(fieldKind(items as SchemaNode)) ? (items as SchemaNode) : undefined;
+  return unionBranches(items as SchemaNode).every(takesText) ? (items as SchemaNode) : undefined;
+}
+
+/**
+ * @param branch - One branch of an item schema, unions opened.
+ * @returns {boolean} Whether it takes text only, so no word turns into a number or `null`.
+ */
+function takesText(branch: SchemaNode): boolean {
+  if (branch.type === "string" || typeof branch.const === "string") return true;
+  return Array.isArray(branch.enum) && branch.enum.every((value) => typeof value === "string");
 }
 
 interface CliHints {
