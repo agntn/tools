@@ -815,10 +815,10 @@ function takesText(branch: SchemaNode, word: string): boolean {
 
 /**
  * @param schema - Property schema.
- * @returns {readonly SchemaNode[]} Its branches, nested unions and type lists opened; no union is one branch.
+ * @returns {readonly SchemaNode[]} Its branches, with nested combinators and type lists opened.
  */
 function unionBranches(schema: SchemaNode): readonly SchemaNode[] {
-  const union = schema.anyOf ?? schema.oneOf;
+  const union = schema.anyOf ?? schema.oneOf ?? schema.allOf;
   if (Array.isArray(union)) return (union as readonly SchemaNode[]).flatMap(unionBranches);
   if (!Array.isArray(schema.type)) return [schema];
   return (schema.type as readonly unknown[]).map((type) => ({ ...schema, type }));

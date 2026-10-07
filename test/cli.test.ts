@@ -212,6 +212,7 @@ describe("CLI commands", () => {
           step: Type.Optional(
             Type.Unsafe<number | boolean>({ oneOf: [{ type: "number" }, { type: "boolean" }] }),
           ),
+          floor: Type.Optional(Type.Intersect([Type.Integer(), Type.Number({ minimum: 1 })])),
         },
         { additionalProperties: false },
       ),
@@ -233,6 +234,7 @@ describe("CLI commands", () => {
     expect(
       (await picked("--level", "2", "--depth", "2", "--page", "3", "--step", "0.5")).stdout,
     ).toBe('{"level":2,"depth":2,"page":3,"step":0.5}\n');
+    expect((await picked("--floor", "2")).stdout).toBe('{"floor":2}\n');
     expect((await picked("--level", "2.0")).stderr).toBe(
       "Invalid arguments at /level: must be one of 1, 2\n",
     );
