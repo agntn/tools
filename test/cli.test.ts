@@ -586,7 +586,7 @@ describe("CLI short flags and rest", () => {
   });
 
   describe("on an array", () => {
-    const search = (words: TSchema) =>
+    const search = (words: TSchema, required = false) =>
       defineTool({
         name: "demo_search",
         title: "Search",
@@ -595,7 +595,7 @@ describe("CLI short flags and rest", () => {
         input: Type.Object(
           {
             digest: Type.String(),
-            words: Type.Optional(words),
+            words: required ? words : Type.Optional(words),
             limit: Type.Optional(Type.Integer()),
           },
           { additionalProperties: false },
@@ -622,6 +622,17 @@ describe("CLI short flags and rest", () => {
       expect((await run(["search", "ab12"], cli(strings))).stdout).toBe('{"digest":"ab12"}\n');
       expect((await run(["search", "--help"], cli(strings))).stdout).toContain(
         "USAGE demo search [OPTIONS] <DIGEST> [WORDS...]\n",
+      );
+    });
+
+    it("gives a required array no words as an empty one and lets the core judge it", async () => {
+      const any = search(Type.Array(Type.String()), true);
+      expect((await run(["search", "ab12"], cli(any))).stdout).toBe(
+        '{"digest":"ab12","words":[]}\n',
+      );
+      const some = search(Type.Array(Type.String(), { minItems: 1 }), true);
+      expect((await run(["search", "ab12"], cli(some))).stderr).toContain(
+        "Invalid arguments at /words",
       );
     });
 

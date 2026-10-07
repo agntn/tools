@@ -646,7 +646,7 @@ function shortField(
  * @param fields - The command's fields.
  * @param positionals - Positional words in order.
  * @returns {Record<string, RawValue>} Each positional property with its word, `rest` with the
- *   others: joined by spaces for a string, one item per word for an array.
+ *   others: joined by spaces for a string, one item per word for an array, empty when required.
  */
 function positionalValues(
   fields: readonly Field[],
@@ -656,10 +656,11 @@ function positionalValues(
   return Object.assign(
     emptyRecord<RawValue>(),
     Object.fromEntries(
-      takes.flatMap((field, index) => {
+      takes.flatMap((field, index): Array<[string, RawValue]> => {
         const words = field.rest ? positionals.slice(index) : positionals.slice(index, index + 1);
-        if (words.length === 0) return [];
-        return [[field.key, field.restItems === undefined ? words.join(" ") : words]];
+        if (field.restItems !== undefined)
+          return words.length > 0 || field.required ? [[field.key, words]] : [];
+        return words.length === 0 ? [] : [[field.key, words.join(" ")]];
       }),
     ),
   );
