@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.2.1
+
+[compare changes](https://github.com/agntn/tools/compare/v0.2.0...v0.2.1)
+
+### 🚀 Enhancements
+
+- Let a tool read the host context ([#50](https://github.com/agntn/tools/pull/50))
+- Export `sanitizeText` from the core ([#54](https://github.com/agntn/tools/pull/54))
+- Add CLI short flags and rest words ([#55](https://github.com/agntn/tools/pull/55))
+- Read dashed words as CLI positionals ([#59](https://github.com/agntn/tools/pull/59))
+- Let a package command write raw bytes ([#61](https://github.com/agntn/tools/pull/61))
+- Add MCP icons and server description ([#64](https://github.com/agntn/tools/pull/64))
+
+### 🩹 Fixes
+
+- Read CLI numbers as written ([#60](https://github.com/agntn/tools/pull/60))
+
+### ❤️ Contributors
+
+- Ori
+- Aeitwoen
+
 ## v0.2.0
 
 [compare changes](https://github.com/agntn/tools/compare/v0.1.1...v0.2.0)
