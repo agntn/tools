@@ -11,8 +11,6 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
-import { Value } from "typebox/value";
-
 import { sanitizeText } from "./escapes.ts";
 import {
   indexTools,
@@ -751,17 +749,40 @@ function readStdin(): string | undefined {
   }
 }
 
+/** An `integer` word: decimal digits, maybe signed. */
+const DECIMAL_INTEGER = /^[+-]?\d+$/;
+
+/** A `number` word: decimal, with an optional fraction and exponent. */
+const DECIMAL_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+
+/**
+ * Reads a number word as written: `Number` alone takes `0x10`, and an empty word as zero.
+ *
+ * @param field - Field the word belongs to, of kind `number`.
+ * @param word - The word.
+ * @returns {{ value: number } | { error: string }} The number, or the core's type error.
+ */
+function numberValue(field: Field, word: string): { value: number } | { error: string } {
+  const integer = field.schema.type === "integer";
+  const value = Number(word);
+  const written = (integer ? DECIMAL_INTEGER : DECIMAL_NUMBER).test(word);
+  if (written && Number.isFinite(value)) return { value };
+  return { error: integer ? "must be integer" : "must be number" };
+}
+
 /**
  * @param field - Field the word belongs to.
  * @param raw - What {@link parseWords} read for it.
- * @returns {{ value: unknown } | { error: string }} The value before TypeBox conversion, or why there is none.
+ * @returns {{ value: unknown } | { error: string }} The value, or why there is none.
  */
 function fieldValue(field: Field, raw: unknown): { value: unknown } | { error: string } {
   if (field.stdin && raw === "-") {
     const text = readStdin();
     return text === undefined ? { error: "stdin is not UTF-8 text" } : { value: text };
   }
-  if (field.kind !== "json" || typeof raw !== "string") return { value: raw };
+  if (typeof raw !== "string") return { value: raw };
+  if (field.kind === "number") return numberValue(field, raw);
+  if (field.kind !== "json") return { value: raw };
   try {
     return { value: JSON.parse(raw) as unknown };
   } catch {
@@ -770,18 +791,16 @@ function fieldValue(field: Field, raw: unknown): { value: unknown } | { error: s
 }
 
 /**
- * Builds the tool input from parsed arguments. Numbers and booleans in the
- * schema are converted from their text by TypeBox; objects and arrays are
- * JSON. The result still goes through {@link invokeTool} validation.
+ * Builds the tool input from parsed arguments. Numbers are read as decimals,
+ * booleans come from the flag, objects and arrays are JSON, and nothing is
+ * bent to fit the schema: {@link invokeTool} validates it as on every surface.
  *
- * @param tool - Tool to call.
  * @param fields - The command's fields.
  * @param values - Raw values by property, from {@link parseWords}.
  * @returns {unknown} The input object.
- * @throws {ToolInputError} When a JSON value does not parse.
+ * @throws {ToolInputError} When a number or a JSON value does not read.
  */
 function toolInput(
-  tool: ToolDefinition,
   fields: readonly Field[],
   values: Readonly<Record<string, string | boolean>>,
 ): unknown {
@@ -801,7 +820,7 @@ function toolInput(
     else input[field.key] = read.value;
   }
   if (errors.length > 0) throw new ToolInputError(errors);
-  return Value.Convert(tool.input, input);
+  return input;
 }
 
 /**
@@ -889,7 +908,7 @@ function toolCommand(tool: ToolDefinition): Command {
     fields,
     json: true,
     async run(words) {
-      const result = await invokeTool(tool, toolInput(tool, fields, words.values));
+      const result = await invokeTool(tool, toolInput(fields, words.values));
       if (result.isError === true) {
         writeLine("stderr", sanitizeText(resultText(result)));
         process.exitCode = 1;

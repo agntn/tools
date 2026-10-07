@@ -122,6 +122,73 @@ describe("CLI commands", () => {
       stderr: "Invalid arguments at /weights: must be JSON\n",
       exitCode: 1,
     });
+    for (const weight of ["1.5", '"2"']) {
+      expect(await run(["measure", "ab", "--weights", `{"x":${weight}}`])).toEqual({
+        stdout: "",
+        stderr: "Invalid arguments at /weights/x: must be integer\n",
+        exitCode: 1,
+      });
+    }
+  });
+
+  it("reads number words as decimals and refuses whatever TypeBox would bend", async () => {
+    const scale = defineTool({
+      name: "demo_scale",
+      title: "Scale",
+      description: "Scale a count.",
+      effect: "read",
+      input: Type.Object(
+        { count: Type.Integer(), factor: Type.Optional(Type.Number()) },
+        { additionalProperties: false },
+      ),
+      execute: (input) => ({
+        content: [{ type: "text", text: JSON.stringify(input) }],
+        details: null,
+      }),
+    });
+    const cli = { ...options, tools: [scale], default: undefined, fallback: undefined };
+    const scaled = async (count: string, factor = "1") =>
+      run(["scale", `--count=${count}`, `--factor=${factor}`], cli);
+
+    expect((await scaled("-5", "1e3")).stdout).toBe('{"count":-5,"factor":1000}\n');
+    expect((await scaled("+007", "-.5")).stdout).toBe('{"count":7,"factor":-0.5}\n');
+    expect((await scaled("2", "2.")).stdout).toBe('{"count":2,"factor":2}\n');
+    for (const count of [
+      "1.5",
+      "2.9",
+      "0x10",
+      "0b11",
+      "1e3",
+      "3.0",
+      "",
+      " 2",
+      "1_000",
+      "9".repeat(400),
+    ]) {
+      expect(await scaled(count)).toEqual({
+        stdout: "",
+        stderr: "Invalid arguments at /count: must be integer\n",
+        exitCode: 1,
+      });
+    }
+    for (const factor of [
+      "0x10",
+      "0o7",
+      "",
+      " ",
+      "Infinity",
+      "NaN",
+      "1e400",
+      "1_0",
+      ".",
+      `${"9".repeat(200_000)}x`,
+    ]) {
+      expect(await scaled("1", factor)).toEqual({
+        stdout: "",
+        stderr: "Invalid arguments at /factor: must be number\n",
+        exitCode: 1,
+      });
+    }
   });
 
   it("fails with the core's validation lines", async () => {
