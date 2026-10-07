@@ -751,17 +751,105 @@ function readStdin(): string | undefined {
   }
 }
 
+/** An `integer` word: decimal digits, maybe signed. */
+const DECIMAL_INTEGER = /^[+-]?\d+$/;
+
+/** A `number` word: decimal, with an optional fraction and exponent. */
+const DECIMAL_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+
+/**
+ * Reads a number word as written: `Number` alone takes `0x10`, and an empty word as zero.
+ *
+ * @param integer - Whether the schema wants an `integer` rather than any `number`.
+ * @param word - The word.
+ * @returns {{ value: number } | { error: string }} The number, or the core's type error.
+ */
+function numberValue(integer: boolean, word: string): { value: number } | { error: string } {
+  const value = Number(word);
+  const written = (integer ? DECIMAL_INTEGER : DECIMAL_NUMBER).test(word);
+  if (written && Number.isFinite(value)) return { value };
+  return { error: integer ? "must be integer" : "must be number" };
+}
+
+/** Literal values a word can spell; an object or array never comes from one word. */
+const LITERAL_TYPES = new Set(["string", "number", "boolean"]);
+
+/** Types whose every value is a literal a word spells. */
+const TYPE_LITERALS = new Map<unknown, readonly unknown[]>([
+  ["null", [null]],
+  ["boolean", [true, false]],
+]);
+
+/**
+ * @param values - Every value the branch allows, from `const`, `enum` or its type.
+ * @param word - The word.
+ * @returns {{ value: unknown } | undefined} The literal the word spells exactly, if any.
+ */
+function literalValue(values: readonly unknown[], word: string): { value: unknown } | undefined {
+  const spelled = (item: unknown) =>
+    (item === null || LITERAL_TYPES.has(typeof item)) && String(item) === word;
+  return values.some(spelled) ? { value: values.find(spelled) } : undefined;
+}
+
+/**
+ * @param branch - One branch of a union.
+ * @param word - The word.
+ * @returns {{ value: unknown } | undefined} What the branch reads the word as, if it takes it at all.
+ */
+function branchValue(branch: SchemaNode, word: string): { value: unknown } | undefined {
+  if (Object.hasOwn(branch, "const")) return literalValue([branch.const], word);
+  if (Array.isArray(branch.enum)) return literalValue(branch.enum, word);
+  const literals = TYPE_LITERALS.get(branch.type);
+  if (literals !== undefined) return literalValue(literals, word);
+  if (TYPE_KINDS.get(branch.type) !== "number") return undefined;
+  const read = numberValue(branch.type === "integer", word);
+  return "value" in read ? read : undefined;
+}
+
+/**
+ * @param schema - Property schema.
+ * @returns {readonly SchemaNode[]} Its branches, with nested combinators and type lists opened.
+ */
+function unionBranches(schema: SchemaNode): readonly SchemaNode[] {
+  const union = schema.anyOf ?? schema.oneOf ?? schema.allOf;
+  if (Array.isArray(union)) return (union as readonly SchemaNode[]).flatMap(unionBranches);
+  if (!Array.isArray(schema.type)) return [schema];
+  return (schema.type as readonly unknown[]).map((type) => ({ ...schema, type }));
+}
+
+/**
+ * The first reading of the word the schema accepts: the text itself, then what each branch spells.
+ *
+ * @param schema - Property schema, a union or not.
+ * @param word - The word.
+ * @returns {unknown} The value, or the word for validation to judge.
+ */
+function wordValue(schema: SchemaNode, word: string): unknown {
+  const readings = [
+    word,
+    ...unionBranches(schema).flatMap((branch) => {
+      const read = branchValue(branch, word);
+      return read === undefined ? [] : [read.value];
+    }),
+  ];
+  const index = readings.findIndex((value) => Value.Check(schema, value));
+  return index === -1 ? word : readings[index];
+}
+
 /**
  * @param field - Field the word belongs to.
  * @param raw - What {@link parseWords} read for it.
- * @returns {{ value: unknown } | { error: string }} The value before TypeBox conversion, or why there is none.
+ * @returns {{ value: unknown } | { error: string }} The value, or why there is none.
  */
 function fieldValue(field: Field, raw: unknown): { value: unknown } | { error: string } {
   if (field.stdin && raw === "-") {
     const text = readStdin();
     return text === undefined ? { error: "stdin is not UTF-8 text" } : { value: text };
   }
-  if (field.kind !== "json" || typeof raw !== "string") return { value: raw };
+  if (typeof raw !== "string") return { value: raw };
+  if (field.kind === "number") return numberValue(field.schema.type === "integer", raw);
+  if (field.kind === "string") return { value: wordValue(field.schema, raw) };
+  if (field.kind !== "json") return { value: raw };
   try {
     return { value: JSON.parse(raw) as unknown };
   } catch {
@@ -770,18 +858,17 @@ function fieldValue(field: Field, raw: unknown): { value: unknown } | { error: s
 }
 
 /**
- * Builds the tool input from parsed arguments. Numbers and booleans in the
- * schema are converted from their text by TypeBox; objects and arrays are
- * JSON. The result still goes through {@link invokeTool} validation.
+ * Builds the tool input from parsed arguments. Numbers are read as decimals,
+ * booleans come from the flag, objects and arrays are JSON, any other word is
+ * its first reading the schema accepts, and nothing is bent to fit it:
+ * {@link invokeTool} validates as on every surface.
  *
- * @param tool - Tool to call.
  * @param fields - The command's fields.
  * @param values - Raw values by property, from {@link parseWords}.
  * @returns {unknown} The input object.
- * @throws {ToolInputError} When a JSON value does not parse.
+ * @throws {ToolInputError} When a number or a JSON value does not read.
  */
 function toolInput(
-  tool: ToolDefinition,
   fields: readonly Field[],
   values: Readonly<Record<string, string | boolean>>,
 ): unknown {
@@ -801,7 +888,7 @@ function toolInput(
     else input[field.key] = read.value;
   }
   if (errors.length > 0) throw new ToolInputError(errors);
-  return Value.Convert(tool.input, input);
+  return input;
 }
 
 /**
@@ -889,7 +976,7 @@ function toolCommand(tool: ToolDefinition): Command {
     fields,
     json: true,
     async run(words) {
-      const result = await invokeTool(tool, toolInput(tool, fields, words.values));
+      const result = await invokeTool(tool, toolInput(fields, words.values));
       if (result.isError === true) {
         writeLine("stderr", sanitizeText(resultText(result)));
         process.exitCode = 1;

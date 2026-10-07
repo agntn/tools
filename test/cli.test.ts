@@ -122,6 +122,129 @@ describe("CLI commands", () => {
       stderr: "Invalid arguments at /weights: must be JSON\n",
       exitCode: 1,
     });
+    for (const weight of ["1.5", '"2"']) {
+      expect(await run(["measure", "ab", "--weights", `{"x":${weight}}`])).toEqual({
+        stdout: "",
+        stderr: "Invalid arguments at /weights/x: must be integer\n",
+        exitCode: 1,
+      });
+    }
+  });
+
+  it("reads number words as decimals and refuses whatever TypeBox would bend", async () => {
+    const scale = defineTool({
+      name: "demo_scale",
+      title: "Scale",
+      description: "Scale a count.",
+      effect: "read",
+      input: Type.Object(
+        { count: Type.Integer(), factor: Type.Optional(Type.Number()) },
+        { additionalProperties: false },
+      ),
+      execute: (input) => ({
+        content: [{ type: "text", text: JSON.stringify(input) }],
+        details: null,
+      }),
+    });
+    const cli = { ...options, tools: [scale], default: undefined, fallback: undefined };
+    const scaled = async (count: string, factor = "1") =>
+      run(["scale", `--count=${count}`, `--factor=${factor}`], cli);
+
+    expect((await scaled("-5", "1e3")).stdout).toBe('{"count":-5,"factor":1000}\n');
+    expect((await scaled("+007", "-.5")).stdout).toBe('{"count":7,"factor":-0.5}\n');
+    expect((await scaled("2", "2.")).stdout).toBe('{"count":2,"factor":2}\n');
+    for (const count of [
+      "1.5",
+      "2.9",
+      "0x10",
+      "0b11",
+      "1e3",
+      "3.0",
+      "",
+      " 2",
+      "1_000",
+      "9".repeat(400),
+    ]) {
+      expect(await scaled(count)).toEqual({
+        stdout: "",
+        stderr: "Invalid arguments at /count: must be integer\n",
+        exitCode: 1,
+      });
+    }
+    for (const factor of [
+      "0x10",
+      "0o7",
+      "",
+      " ",
+      "Infinity",
+      "NaN",
+      "1e400",
+      "1_0",
+      ".",
+      `${"9".repeat(200_000)}x`,
+    ]) {
+      expect(await scaled("1", factor)).toEqual({
+        stdout: "",
+        stderr: "Invalid arguments at /factor: must be number\n",
+        exitCode: 1,
+      });
+    }
+  });
+
+  it("reads a word for a union the way some branch takes it", async () => {
+    const pick = defineTool({
+      name: "demo_pick",
+      title: "Pick",
+      description: "Pick a limit.",
+      effect: "read",
+      input: Type.Object(
+        {
+          limit: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+          label: Type.Optional(Type.Union([Type.Integer(), Type.String()])),
+          size: Type.Optional(Type.Union([Type.Enum(["all"]), Type.Integer()])),
+          strict: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+          cursor: Type.Optional(Type.Null()),
+          level: Type.Optional(Type.Enum([1, 2])),
+          depth: Type.Optional(
+            Type.Union([Type.Union([Type.Integer(), Type.Null()]), Type.Boolean()]),
+          ),
+          page: Type.Optional(Type.Unsafe<number | null>({ type: ["integer", "null"] })),
+          step: Type.Optional(
+            Type.Unsafe<number | boolean>({ oneOf: [{ type: "number" }, { type: "boolean" }] }),
+          ),
+          floor: Type.Optional(Type.Intersect([Type.Integer(), Type.Number({ minimum: 1 })])),
+          code: Type.Optional(Type.Union([Type.String({ pattern: "^[a-z]+$" }), Type.Integer()])),
+        },
+        { additionalProperties: false },
+      ),
+      execute: (input) => ({
+        content: [{ type: "text", text: JSON.stringify(input) }],
+        details: null,
+      }),
+    });
+    const cli = { ...options, tools: [pick], default: undefined, fallback: undefined };
+    const picked = async (...argv: readonly string[]) => run(["pick", ...argv], cli);
+
+    expect((await picked("--limit", "2", "--label", "2", "--size", "3")).stdout).toBe(
+      '{"limit":2,"label":"2","size":3}\n',
+    );
+    expect(
+      (await picked("--limit", "null", "--size", "all", "--strict", "false", "--cursor", "null"))
+        .stdout,
+    ).toBe('{"limit":null,"size":"all","strict":false,"cursor":null}\n');
+    expect(
+      (await picked("--level", "2", "--depth", "2", "--page", "3", "--step", "0.5")).stdout,
+    ).toBe('{"level":2,"depth":2,"page":3,"step":0.5}\n');
+    expect((await picked("--floor", "2", "--code", "2")).stdout).toBe('{"floor":2,"code":2}\n');
+    expect((await picked("--code", "ab")).stdout).toBe('{"code":"ab"}\n');
+    expect((await picked("--level", "2.0")).stderr).toBe(
+      "Invalid arguments at /level: must be one of 1, 2\n",
+    );
+    for (const limit of ["1.5", "0x10"]) {
+      const { stdout, stderr } = await picked("--limit", limit);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("Invalid arguments at /limit: must be integer\n");
+    }
   });
 
   it("fails with the core's validation lines", async () => {
