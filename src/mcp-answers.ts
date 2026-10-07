@@ -13,6 +13,7 @@ import {
   sanitizeLine,
   ToolInputError,
   wireSchema,
+  type Icon,
   type ToolCallContext,
   type ToolDefinition,
 } from "./index.ts";
@@ -23,6 +24,9 @@ export interface McpServerInfo {
   readonly version: string;
   /** Display name for clients that show one, such as `Forges`. */
   readonly title?: string;
+  /** One line under the name on a connector card or in a registry. */
+  readonly description?: string;
+  readonly icons?: readonly Icon[];
   /** Project home a client can link to. */
   readonly websiteUrl?: string;
 }
@@ -62,7 +66,7 @@ export function errorResult(...lines: readonly string[]): CallToolResult {
  * The entries `tools/list` answers with, in the order given.
  *
  * @param tools - Tools to list.
- * @returns {Tool[]} Name, title, description, schema and annotations of each tool.
+ * @returns {Tool[]} Name, title, description, icons, schema and annotations of each tool.
  * @throws {ToolDefinitionError} When two tools share a name.
  */
 export function listTools(tools: readonly ToolDefinition[]): Tool[] {
@@ -71,9 +75,22 @@ export function listTools(tools: readonly ToolDefinition[]): Tool[] {
     name: tool.name,
     title: tool.title,
     description: tool.description,
+    ...(tool.icons === undefined ? {} : { icons: copyIcons(tool.icons) }),
     inputSchema: wireSchema(tool) as Tool["inputSchema"],
     annotations: toolAnnotations(tool),
   }));
+}
+
+/**
+ * Icons as the SDK types them, mutable arrays included.
+ *
+ * @param icons - Icons from a definition or the server info.
+ * @returns {NonNullable<Tool["icons"]>} The same icons, copied.
+ */
+export function copyIcons(icons: readonly Icon[]): NonNullable<Tool["icons"]> {
+  return icons.map(({ sizes, ...rest }) =>
+    sizes === undefined ? rest : { ...rest, sizes: [...sizes] },
+  );
 }
 
 /**

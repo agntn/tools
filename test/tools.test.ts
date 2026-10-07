@@ -28,6 +28,7 @@ import {
   validateInput,
   invokeTool,
   resultText,
+  type Icon,
   type ToolCallContext,
   type ToolResult,
 } from "../src/index.ts";
@@ -35,6 +36,12 @@ import { toH3Tools } from "../src/h3.ts";
 import { callTool, createMcpServer, listTools } from "../src/mcp.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
+
+const icon: Icon = {
+  src: "https://demo.example/icon.svg",
+  mimeType: "image/svg+xml",
+  sizes: ["any"],
+};
 
 const echo = defineTool({
   name: "demo_echo",
@@ -511,10 +518,17 @@ describe("MCP adapter", () => {
     });
   });
 
-  it("hands the client the title and website from the server info", async () => {
+  it("hands the client the title, description, icons and website from the server info", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createMcpServer(
-      { name: "demo", version: "0.0.0", title: "Demo", websiteUrl: "https://demo.example" },
+      {
+        name: "demo",
+        version: "0.0.0",
+        title: "Demo",
+        description: "Echoes words for tests.",
+        icons: [icon],
+        websiteUrl: "https://demo.example",
+      },
       [echo],
     );
     const client = new Client({ name: "test", version: "0.0.0" });
@@ -525,11 +539,25 @@ describe("MCP adapter", () => {
       name: "demo",
       version: "0.0.0",
       title: "Demo",
+      description: "Echoes words for tests.",
+      icons: [icon],
       websiteUrl: "https://demo.example",
     });
     expect((await client.callTool({ name: "nope", arguments: {} })).content).toEqual([
       { type: "text", text: 'Unknown demo tool: "nope"' },
     ]);
+  });
+
+  it("lists a tool's icons and leaves the key out for a tool without them", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer({ name: "demo", version: "0.0.0" }, [echo, signal]);
+    const client = new Client({ name: "test", version: "0.0.0" });
+    open.push(client, server);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const [plain, drawn] = (await client.listTools()).tools;
+
+    expect(plain).not.toHaveProperty("icons");
+    expect(drawn?.icons).toEqual(signal.icons);
   });
 
   it("passes success, returned failure, validation failure and thrown failure", async () => {
@@ -663,6 +691,7 @@ const signal = defineTool({
   name: "demo_signal",
   title: "Demo Signal",
   description: "Report whether the call has an abort signal.",
+  icons: [icon, { src: "https://demo.example/signal-dark.png", sizes: ["48x48"], theme: "dark" }],
   effect: "read",
   input: Type.Object({}),
   execute: (_input, context) => ({
