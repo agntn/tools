@@ -203,6 +203,7 @@ describe("CLI commands", () => {
           label: Type.Optional(Type.Union([Type.Integer(), Type.String()])),
           size: Type.Optional(Type.Union([Type.Enum(["all"]), Type.Integer()])),
           strict: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+          cursor: Type.Optional(Type.Null()),
         },
         { additionalProperties: false },
       ),
@@ -217,9 +218,10 @@ describe("CLI commands", () => {
     expect((await picked("--limit", "2", "--label", "2", "--size", "3")).stdout).toBe(
       '{"limit":2,"label":"2","size":3}\n',
     );
-    expect((await picked("--limit", "null", "--size", "all", "--strict", "false")).stdout).toBe(
-      '{"limit":null,"size":"all","strict":false}\n',
-    );
+    expect(
+      (await picked("--limit", "null", "--size", "all", "--strict", "false", "--cursor", "null"))
+        .stdout,
+    ).toBe('{"limit":null,"size":"all","strict":false,"cursor":null}\n');
     for (const limit of ["1.5", "0x10"]) {
       const { stdout, stderr } = await picked("--limit", limit);
       expect(stdout).toBe("");
