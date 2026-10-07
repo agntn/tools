@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { commandName, createCli, normalizeArgv, type CliOptions } from "../src/cli.ts";
 import { defineTool, ToolDefinitionError, Type, type ToolDefinition } from "../src/index.ts";
-import { demoTools, DemoError, echo } from "./fixtures/demo.ts";
+import { demoTools, DemoError, echo, serverInfo } from "./fixtures/demo.ts";
 
 const options: CliOptions = {
   name: "demo",
@@ -21,6 +21,7 @@ const options: CliOptions = {
 
 const fixture = fileURLToPath(new URL("fixtures/demo-cli.ts", import.meta.url));
 const plainFixture = fileURLToPath(new URL("fixtures/plain-cli.ts", import.meta.url));
+const serverInfoFixture = fileURLToPath(new URL("fixtures/server-info-cli.ts", import.meta.url));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -864,6 +865,27 @@ describe("CLI process", () => {
       expect(
         await client.callTool({ name: "demo_echo", arguments: { word: "hi", mode: "loud" } }),
       ).toMatchObject({ content: [{ text: "HI" }] });
+      expect(client.getServerVersion()).toEqual({
+        name: "demo",
+        version: "1.2.3",
+        description: "Demo tools",
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("introduces the MCP server with the info mcp was given, not the help line", async () => {
+    const client = new Client({ name: "test", version: "0" });
+    await client.connect(
+      new StdioClientTransport({ command: process.execPath, args: [serverInfoFixture, "mcp"] }),
+    );
+    try {
+      expect(client.getServerVersion()).toEqual(serverInfo);
+      expect((await client.listTools()).tools.map((each) => each.name)).toEqual([
+        "demo_echo",
+        "demo_text_measure",
+      ]);
     } finally {
       await client.close();
     }

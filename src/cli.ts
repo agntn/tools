@@ -23,6 +23,7 @@ import {
   ToolInputError,
   type ToolDefinition,
 } from "./index.ts";
+import type { McpServerInfo } from "./mcp-answers.ts";
 
 export interface CliOptions {
   /** Executable name, also the MCP server name. */
@@ -42,8 +43,8 @@ export interface CliOptions {
   readonly default?: string;
   /** Command for a first word that names no command: `hashes sha256 x` runs `hashes hash sha256 x`. */
   readonly fallback?: string;
-  /** Adds `mcp`, the tools as an MCP server over stdio. */
-  readonly mcp?: boolean;
+  /** Adds `mcp` over stdio, named by the CLI on `true` or by the server info it's handed. */
+  readonly mcp?: boolean | McpServerInfo;
   /**
    * Errors the package throws on purpose. They print as one line with exit
    * code 1; any other error keeps its stack trace.
@@ -1008,7 +1009,8 @@ function mcpCommand(options: CliOptions): Command {
         import("./mcp.ts"),
         import("@modelcontextprotocol/server/stdio"),
       ]);
-      await createMcpServer(options, options.tools).connect(new StdioServerTransport());
+      const info = typeof options.mcp === "object" ? options.mcp : options;
+      await createMcpServer(info, options.tools).connect(new StdioServerTransport());
     },
   };
 }
@@ -1034,7 +1036,8 @@ function commandTools(options: CliOptions): ToolDefinition[] {
  */
 function builtInMcp(options: CliOptions): boolean {
   return (
-    options.mcp === true &&
+    options.mcp !== undefined &&
+    options.mcp !== false &&
     !(options.commands ?? []).some((command) => commandName(command) === "mcp")
   );
 }
