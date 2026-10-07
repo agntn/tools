@@ -205,6 +205,13 @@ describe("CLI commands", () => {
           strict: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
           cursor: Type.Optional(Type.Null()),
           level: Type.Optional(Type.Enum([1, 2])),
+          depth: Type.Optional(
+            Type.Union([Type.Union([Type.Integer(), Type.Null()]), Type.Boolean()]),
+          ),
+          page: Type.Optional(Type.Unsafe<number | null>({ type: ["integer", "null"] })),
+          step: Type.Optional(
+            Type.Unsafe<number | boolean>({ oneOf: [{ type: "number" }, { type: "boolean" }] }),
+          ),
         },
         { additionalProperties: false },
       ),
@@ -223,7 +230,9 @@ describe("CLI commands", () => {
       (await picked("--limit", "null", "--size", "all", "--strict", "false", "--cursor", "null"))
         .stdout,
     ).toBe('{"limit":null,"size":"all","strict":false,"cursor":null}\n');
-    expect((await picked("--level", "2")).stdout).toBe('{"level":2}\n');
+    expect(
+      (await picked("--level", "2", "--depth", "2", "--page", "3", "--step", "0.5")).stdout,
+    ).toBe('{"level":2,"depth":2,"page":3,"step":0.5}\n');
     expect((await picked("--level", "2.0")).stderr).toBe(
       "Invalid arguments at /level: must be one of 1, 2\n",
     );

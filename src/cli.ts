@@ -814,14 +814,25 @@ function takesText(branch: SchemaNode, word: string): boolean {
 }
 
 /**
+ * @param schema - Property schema.
+ * @returns {readonly SchemaNode[]} Its branches, nested unions and type lists opened; no union is one branch.
+ */
+function unionBranches(schema: SchemaNode): readonly SchemaNode[] {
+  const union = schema.anyOf ?? schema.oneOf;
+  if (Array.isArray(union)) return (union as readonly SchemaNode[]).flatMap(unionBranches);
+  if (!Array.isArray(schema.type)) return [schema];
+  return (schema.type as readonly unknown[]).map((type) => ({ ...schema, type }));
+}
+
+/**
  * A union keeps a word some branch takes as text, else reads it through the first branch that takes it.
  *
- * @param schema - Property schema; one that is no union counts as its only branch.
+ * @param schema - Property schema, a union or not.
  * @param word - The word.
  * @returns {unknown} The value, or the word for validation to judge.
  */
 function unionValue(schema: SchemaNode, word: string): unknown {
-  const branches = Array.isArray(schema.anyOf) ? (schema.anyOf as readonly SchemaNode[]) : [schema];
+  const branches = unionBranches(schema);
   if (branches.some((branch) => takesText(branch, word))) return word;
   for (const branch of branches) {
     const read = branchValue(branch, word);
