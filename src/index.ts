@@ -65,7 +65,7 @@ export interface ToolCliHints {
   readonly description?: string;
   /** Properties taken in this order as positional arguments instead of flags. */
   readonly positional?: readonly string[];
-  /** A string property that takes every word left after `positional`, joined by single spaces. */
+  /** Words left after `positional`: joined by spaces into a string, one per item into an array. */
   readonly rest?: string;
   /** Short flags by property, `{ limit: "n" }` for `-n 5`. Only a whole word counts. */
   readonly short?: Readonly<Record<string, string>>;

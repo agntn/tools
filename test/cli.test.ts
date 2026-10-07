@@ -18,6 +18,7 @@ import {
   ToolDefinitionError,
   Type,
   type ToolDefinition,
+  type TSchema,
 } from "../src/index.ts";
 import { demoTools, DemoError, echo, serverInfo } from "./fixtures/demo.ts";
 
@@ -584,9 +585,74 @@ describe("CLI short flags and rest", () => {
     expect((await run(["city", "Paris"], cli(city))).exitCode).toBe(1);
   });
 
+  describe("on an array", () => {
+    const search = (words: TSchema) =>
+      defineTool({
+        name: "demo_search",
+        title: "Search",
+        description: "Search for words.",
+        effect: "read",
+        input: Type.Object(
+          {
+            digest: Type.String(),
+            words: Type.Optional(words),
+            limit: Type.Optional(Type.Integer()),
+          },
+          { additionalProperties: false },
+        ),
+        cli: { positional: ["digest"], rest: "words" },
+        execute: (input) => ({
+          content: [{ type: "text", text: JSON.stringify(input) }],
+          details: null,
+        }),
+      });
+    const strings = search(Type.Array(Type.String(), { minItems: 1 }));
+
+    it("keeps one item per word, a space inside a word included", async () => {
+      expect(
+        (await run(["search", "ab12", "jacque fresco", "--limit", "3", "venus"], cli(strings)))
+          .stdout,
+      ).toBe('{"digest":"ab12","words":["jacque fresco","venus"],"limit":3}\n');
+      expect((await run(["search", "ab12", "--", "-12", "", "--limit"], cli(strings))).stdout).toBe(
+        '{"digest":"ab12","words":["-12","","--limit"]}\n',
+      );
+    });
+
+    it("leaves an optional array out when no word is left", async () => {
+      expect((await run(["search", "ab12"], cli(strings))).stdout).toBe('{"digest":"ab12"}\n');
+      expect((await run(["search", "--help"], cli(strings))).stdout).toContain(
+        "USAGE demo search [OPTIONS] <DIGEST> [WORDS...]\n",
+      );
+    });
+
+    it("reads each word against the item schema and lets the core check the rest", async () => {
+      const colors = search(Type.Array(Type.Enum(["red", "green"]), { maxItems: 2 }));
+      expect((await run(["search", "ab12", "red", "green"], cli(colors))).stdout).toBe(
+        '{"digest":"ab12","words":["red","green"]}\n',
+      );
+      expect((await run(["search", "ab12", "red", "blue"], cli(colors))).stderr).toContain(
+        "Invalid arguments at /words/1",
+      );
+      expect((await run(["search", "ab12", "red", "red", "red"], cli(colors))).stderr).toContain(
+        "Invalid arguments at /words",
+      );
+    });
+
+    it("refuses an array whose items are no text", () => {
+      expect(() => createCli(cli(search(Type.Array(Type.Integer()))))).toThrow(
+        "demo_search: rest property words must be a string or an array of strings",
+      );
+      expect(() => createCli(cli(search(Type.Array(Type.Array(Type.String())))))).toThrow(
+        "demo_search: rest property words must be a string or an array of strings",
+      );
+    });
+  });
+
   it("rejects short and rest hints the schema cannot take", () => {
     const build = (hint: Parameters<typeof find>[0]) => () => createCli(cli(find(hint)));
-    expect(build({ rest: "limit" })).toThrow("demo_find: rest property limit must be a string");
+    expect(build({ rest: "limit" })).toThrow(
+      "demo_find: rest property limit must be a string or an array of strings",
+    );
     expect(build({ rest: "nope" })).toThrow("demo_find: cli hint names unknown property nope");
     expect(build({ positional: ["query"], rest: "query" })).toThrow(
       "demo_find: cli hint lists positional query twice",
