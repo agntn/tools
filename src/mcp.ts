@@ -7,6 +7,7 @@ import { Server } from "@modelcontextprotocol/server";
 import { indexTools, type ToolDefinition } from "./index.ts";
 import {
   callTool,
+  copyIcons,
   listTools,
   progressSteps,
   type McpServerInfo,
@@ -37,15 +38,25 @@ export {
  *
  * A progress notification that fails to send goes to `onerror`, never to the tool.
  *
- * @param info - Server name, version and optional title and website, sent to the client as given.
+ * @param info - Name, version and optional title, description, icons and website, sent as given.
  * @param tools - Tools to serve.
  * @returns {Server} Unconnected MCP server.
  * @throws {ToolDefinitionError} When two tools share a name.
  */
 export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinition[]): Server {
   indexTools(tools);
-  const { name, version, title, websiteUrl } = info;
-  const server = new Server({ name, version, title, websiteUrl }, { capabilities: { tools: {} } });
+  const { name, version, title, description, icons, websiteUrl } = info;
+  const server = new Server(
+    {
+      name,
+      version,
+      title,
+      description,
+      ...(icons === undefined ? {} : { icons: copyIcons(icons) }),
+      websiteUrl,
+    },
+    { capabilities: { tools: {} } },
+  );
 
   server.setRequestHandler("tools/list", () => ({ tools: listTools(tools) }));
   server.setRequestHandler("tools/call", (request, ctx) => {

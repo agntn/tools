@@ -35,6 +35,7 @@ export function toH3Tools(
     name: entry.name,
     title: entry.title,
     description: entry.description,
+    ...(entry.icons === undefined ? {} : { icons: entry.icons }),
     inputSchema: entry.inputSchema as JsonSchema,
     annotations: entry.annotations,
     handler: (args, event) => {

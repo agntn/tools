@@ -83,6 +83,16 @@ export interface ToolProgress {
   readonly total?: number;
 }
 
+/** An MCP icon, the SDK's own shape: a URL or `data:` URI a client can draw on its card. */
+export interface Icon {
+  readonly src: string;
+  readonly mimeType?: string;
+  /** `WxH` sizes such as `48x48`, or `any` for an SVG. */
+  readonly sizes?: readonly string[];
+  /** Background the icon is drawn for. */
+  readonly theme?: "light" | "dark";
+}
+
 /** Per-call context the adapters hand to `execute`. */
 export interface ToolCallContext {
   signal?: AbortSignal;
@@ -99,6 +109,8 @@ export interface ToolDefinition<Input extends TObject = TObject, Details = unkno
   readonly title: string;
   /** Complete instruction for the model. MCP clients see nothing else. */
   readonly description: string;
+  /** MCP `icons` in `tools/list`. Pi, OMP, the AI SDK and the CLI don't draw them. */
+  readonly icons?: readonly Icon[];
   /** Pi `promptSnippet`. */
   readonly snippet?: string;
   /** Pi `promptGuidelines`. Must not promise anything `description` lacks. */
