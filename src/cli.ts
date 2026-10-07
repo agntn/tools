@@ -33,8 +33,9 @@ export interface CliOptions {
   /**
    * The package's own commands, as tool definitions that only the CLI gets:
    * no MCP, Pi, OMP or AI SDK host sees them. One whose command name matches
-   * a generated command, `mcp` included, takes its place. A command that
-   * needs bytes, not text, reads `-` from stdin itself in `execute`.
+   * a generated command, `mcp` included, takes its place. Bytes are the
+   * command's own business: it reads `-` from stdin itself in `execute`, and
+   * writes to stdout itself, answering with no content so the CLI prints nothing.
    */
   readonly commands?: readonly ToolDefinition[];
   /** Command for an empty command line. */
@@ -982,7 +983,7 @@ function toolCommand(tool: ToolDefinition): Command {
         process.exitCode = 1;
       } else if (words.json) {
         writeLine("stdout", detailsJson(result.details));
-      } else {
+      } else if (result.content.length > 0) {
         writeLine("stdout", sanitizeText(resultText(result)));
         const images = result.content.filter((block) => block.type === "image").length;
         if (images > 0) writeLine("stderr", `(${images} image block(s) not printed)`);
