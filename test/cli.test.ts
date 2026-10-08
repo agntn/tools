@@ -493,6 +493,82 @@ describe("CLI commands", () => {
   });
 });
 
+/* Runs the CLI with stderr on a terminal `columns` wide, or off one. */
+async function runOnTerminal(tty: boolean, argv: readonly string[], cli: CliOptions, columns = 80) {
+  const before = { isTTY: process.stderr.isTTY, columns: process.stderr.columns };
+  Object.assign(process.stderr, { isTTY: tty, columns });
+  try {
+    return await run(argv, cli);
+  } finally {
+    Object.assign(process.stderr, before);
+  }
+}
+
+describe("CLI progress", () => {
+  const slow = defineTool({
+    name: "demo_slow",
+    title: "Slow",
+    description: "Take a while, say so, and fail on request.",
+    effect: "read",
+    input: Type.Object({ fail: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+    execute({ fail }, { progress }) {
+      progress?.("Hashing block 1", { progress: 1, total: 2 });
+      progress?.("Nearly\u001B[2J\nthere");
+      if (fail === true) throw new DemoError("disk on fire");
+      return { content: [{ type: "text", text: "done" }], details: null };
+    },
+  });
+  const cli: CliOptions = { ...options, tools: [...demoTools, slow] };
+
+  it("rewrites one stderr line on a terminal and wipes it before the answer", async () => {
+    expect(await runOnTerminal(true, ["slow"], cli)).toEqual({
+      stdout: "done\n",
+      stderr: `Hashing block 1 (1/2)\r${" ".repeat(21)}\rNearly there\r${" ".repeat(12)}\r`,
+      exitCode: undefined,
+    });
+  });
+
+  it("wipes the line before an error and cuts it to the terminal width", async () => {
+    expect(await runOnTerminal(true, ["slow", "--fail"], cli, 8)).toEqual({
+      stdout: "",
+      stderr: `Hashing\r${" ".repeat(7)}\rNearly \r${" ".repeat(7)}\rdisk on fire\n`,
+      exitCode: 1,
+    });
+  });
+
+  it("counts the cells wide characters and emoji take, and an empty line clears", async () => {
+    const wide = defineTool({
+      name: "demo_wide",
+      title: "Wide",
+      description: "Report progress in wide characters.",
+      effect: "read",
+      input: Type.Object({}),
+      execute(_input, { progress }) {
+        progress?.("日本語のテキスト");
+        progress?.("👍🏽 ok");
+        progress?.("1\uFE0F\u20E32\uFE0F\u20E33\uFE0F\u20E34\uFE0F\u20E3");
+        progress?.("");
+        return { content: [{ type: "text", text: "done" }], details: null };
+      },
+    });
+    expect(
+      await runOnTerminal(true, ["wide"], { ...options, tools: [...demoTools, wide] }, 8),
+    ).toEqual({
+      stdout: "done\n",
+      stderr: `日本語\r${" ".repeat(6)}\r👍🏽 ok\r${" ".repeat(7)}\r1\uFE0F\u20E32\uFE0F\u20E33\uFE0F\u20E3\r${" ".repeat(6)}\r`,
+      exitCode: undefined,
+    });
+  });
+
+  it("keeps a pipe to the answer alone", async () => {
+    expect(await runOnTerminal(false, ["slow"], cli)).toEqual({
+      stdout: "done\n",
+      stderr: "",
+      exitCode: undefined,
+    });
+  });
+});
+
 describe("CLI short flags and rest", () => {
   const find = (cli: NonNullable<Parameters<typeof defineTool>[0]["cli"]>) =>
     defineTool({

@@ -21,7 +21,9 @@ import {
   sanitizeLine,
   ToolDefinitionError,
   ToolInputError,
+  type ToolCallContext,
   type ToolDefinition,
+  type ToolProgress,
 } from "./index.ts";
 import type { McpServerInfo } from "./mcp-answers.ts";
 
@@ -37,7 +39,8 @@ export interface CliOptions {
    * a generated command, `mcp` included, takes its place. Bytes are the
    * command's own business: it reads `-` from stdin itself in `execute`, and
    * writes to stdout itself, answering with no content and `cli.json: false`.
-   * A command that prints rows as they land reads `--json` off its {@link CliHost}.
+   * A command that prints rows as they land reads `--json` off its {@link CliHost},
+   * and leaves `progress` alone: on a terminal its line would sit in front of the rows.
    */
   readonly commands?: readonly ToolDefinition[];
   /** Command for an empty command line. */
@@ -1001,6 +1004,105 @@ const JSON_FORGING =
   /* oxlint-disable-next-line no-control-regex */
   /[\u007F-\u009F\u061C\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u206F]/g;
 
+/** Cuts the progress line between characters a terminal draws, so an emoji stays whole. */
+const GRAPHEMES = new Intl.Segmenter();
+
+/** Code points a terminal draws two cells wide: emoji and the East Asian wide blocks. */
+const WIDE =
+  /^(?:\p{Extended_Pictographic}|[\u1100-\u115F\u231A\u231B\u2329\u232A\u2630-\u2637\u268A-\u268F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DFF\u4E00-\u9FFF\uA000-\uA4CF\uA960-\uA97F\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6\u{16FE0}-\u{18DFF}\u{1AFF0}-\u{1B2FF}\u{1D15E}-\u{1D164}\u{1D1BB}-\u{1D1C0}\u{1D300}-\u{1D376}\u{1F000}-\u{1FAFF}\u{20000}-\u{3FFFD}])$/u;
+
+/** Emoji a terminal draws two cells wide whatever their code points add up to, as `1️⃣`. */
+const EMOJI = /^\p{RGI_Emoji}$/v;
+
+/** Marks that sit on the character before them and take no cell of their own. */
+const ZERO_WIDTH = /^[\p{Mn}\p{Me}]$/u;
+
+/**
+ * @param point - One code point.
+ * @returns {number} Cells it takes on a terminal.
+ */
+function pointCells(point: string): number {
+  if (WIDE.test(point)) return 2;
+  return ZERO_WIDTH.test(point) ? 0 : 1;
+}
+
+/**
+ * @param grapheme - One grapheme.
+ * @returns {number} Cells it takes on a terminal.
+ */
+function graphemeCells(grapheme: string): number {
+  let size = 0;
+  for (const point of grapheme.normalize("NFC")) size += pointCells(point);
+  return Math.max(EMOJI.test(grapheme) ? 2 : 1, size);
+}
+
+/**
+ * Counts no fewer cells than Node's ICU, since a short count wraps the line past the wipe.
+ *
+ * @param text - Line to fit.
+ * @param room - Cells there are.
+ * @returns {{ text: string; cells: number }} The graphemes that fit and the cells they take.
+ */
+function fitLine(text: string, room: number): { text: string; cells: number } {
+  let fitted = "";
+  let used = 0;
+  for (const { segment } of GRAPHEMES.segment(text)) {
+    const size = graphemeCells(segment);
+    if (used + size > room) break;
+    fitted += segment;
+    used += size;
+  }
+  return { text: fitted, cells: used };
+}
+
+/** Where a call's progress goes on the command line, and how to take it back. */
+interface ProgressLine {
+  readonly context: Pick<ToolCallContext, "progress">;
+  readonly wipe: () => void;
+}
+
+/**
+ * @param message - Line from the tool, already through `sanitizeLine`.
+ * @param amount - How far it has come.
+ * @returns {string} The line, with `(3/10)` when the tool knows the total.
+ */
+function progressText(message: string, amount?: ToolProgress): string {
+  const { progress, total } = amount ?? { progress: Number.NaN };
+  if (!Number.isFinite(progress) || !Number.isFinite(total)) return message;
+  return `${message} (${progress}/${total})`.trim();
+}
+
+/**
+ * One stderr line that each progress update rewrites in place, wiped before the answer.
+ * Off a terminal there's no line at all, so a pipe or a log gets the answer and nothing else.
+ *
+ * @returns {ProgressLine} The context to hand `invokeTool` and the wipe for after it.
+ */
+function progressLine(): ProgressLine {
+  const stream = process.stderr;
+  if (stream.isTTY !== true) return { context: {}, wipe() {} };
+  let width = 0;
+  /** Blanks the line and puts the cursor back at its start, where every update leaves it. */
+  const wipe = (): void => {
+    if (width > 0) stream.write(`\r${" ".repeat(width)}\r`);
+    width = 0;
+  };
+  return {
+    context: {
+      progress(message, amount) {
+        const line = fitLine(
+          progressText(message, amount),
+          Math.max(1, (stream.columns || 80) - 1),
+        );
+        wipe();
+        stream.write(line.text);
+        width = line.cells;
+      },
+    },
+    wipe,
+  };
+}
+
 /** One command the CLI dispatches to: a tool, a package command or `mcp`. */
 interface Command {
   readonly name: string;
@@ -1028,7 +1130,13 @@ function toolCommand(tool: ToolDefinition): Command {
     json: tool.cli?.json !== false,
     async run(words) {
       const host: CliHost = { cli: true, json: words.json };
-      const result = await invokeTool(tool, toolInput(fields, words.values), { host });
+      const line = progressLine();
+      let result;
+      try {
+        result = await invokeTool(tool, toolInput(fields, words.values), { ...line.context, host });
+      } finally {
+        line.wipe();
+      }
       if (result.isError === true) {
         writeLine("stderr", sanitizeText(resultText(result)));
         process.exitCode = 1;
@@ -1300,8 +1408,8 @@ function exitOnClosedPipe(error: Readonly<NodeJS.ErrnoException>): void {
 }
 
 /**
- * Runs the CLI on `process.argv`. The CLI writes no colors, so nothing
- * depends on the terminal it writes to.
+ * Runs the CLI on `process.argv`. The CLI writes no colors; a terminal on
+ * stderr only gets the progress line, which never reaches a pipe.
  *
  * @param options - CLI options.
  * @param argv - Words after the executable and script.
