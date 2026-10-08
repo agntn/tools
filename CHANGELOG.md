@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.2
+
+[compare changes](https://github.com/agntn/tools/compare/v0.2.1...v0.2.2)
+
+### 🚀 Enhancements
+
+- Let `runCli` take the MCP server info ([#66](https://github.com/agntn/tools/pull/66))
+- Tell CLI commands about `--json` ([#68](https://github.com/agntn/tools/pull/68))
+- Let CLI `rest` take a string array ([#71](https://github.com/agntn/tools/pull/71))
+- Show progress on the command line ([#72](https://github.com/agntn/tools/pull/72))
+
+### ❤️ Contributors
+
+- Ori ([@oritwoen](https://github.com/oritwoen))
+- Aeitwoen ([@aeitwoen](https://github.com/aeitwoen))
+
 ## v0.2.1
 
 [compare changes](https://github.com/agntn/tools/compare/v0.2.0...v0.2.1)
