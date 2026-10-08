@@ -1011,7 +1011,7 @@ const GRAPHEMES = new Intl.Segmenter();
 const WIDE =
   /^(?:\p{Extended_Pictographic}|[\u1100-\u115F\u231A\u231B\u2329\u232A\u2630-\u2637\u268A-\u268F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DFF\u4E00-\u9FFF\uA000-\uA4CF\uA960-\uA97F\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6\u{16FE0}-\u{18DFF}\u{1AFF0}-\u{1B2FF}\u{1D15E}-\u{1D164}\u{1D1BB}-\u{1D1C0}\u{1D300}-\u{1D376}\u{1F000}-\u{1FAFF}\u{20000}-\u{3FFFD}])$/u;
 
-/** Emoji sequences a terminal draws two cells wide whatever their code points add up to, as `1️⃣`. */
+/** Emoji a terminal draws two cells wide whatever their code points add up to, as `1️⃣`. */
 const EMOJI = /^\p{RGI_Emoji}$/v;
 
 /** Marks that sit on the character before them and take no cell of their own. */
