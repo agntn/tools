@@ -1007,6 +1007,42 @@ const JSON_FORGING =
 /** Cuts the progress line between characters a terminal draws, so an emoji stays whole. */
 const GRAPHEMES = new Intl.Segmenter();
 
+/** Code points a terminal draws two cells wide: emoji and the East Asian wide blocks. */
+const WIDE =
+  /^(?:\p{Extended_Pictographic}|[\u1100-\u115F\u231A\u231B\u2329\u232A\u2630-\u2637\u268A-\u268F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DFF\u4E00-\u9FFF\uA000-\uA4CF\uA960-\uA97F\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6\u{16FE0}-\u{18DFF}\u{1AFF0}-\u{1B2FF}\u{1D15E}-\u{1D164}\u{1D1BB}-\u{1D1C0}\u{1D300}-\u{1D376}\u{1F000}-\u{1FAFF}\u{20000}-\u{3FFFD}])$/u;
+
+/** Marks that sit on the character before them and take no cell of their own. */
+const ZERO_WIDTH = /^[\p{Mn}\p{Me}]$/u;
+
+/**
+ * @param point - One code point.
+ * @returns {number} Cells it takes on a terminal.
+ */
+function pointCells(point: string): number {
+  if (WIDE.test(point)) return 2;
+  return ZERO_WIDTH.test(point) ? 0 : 1;
+}
+
+/**
+ * Counts no fewer cells than Node's ICU, since a short count wraps the line past the wipe.
+ *
+ * @param text - Line to fit.
+ * @param room - Cells there are.
+ * @returns {{ text: string; cells: number }} The graphemes that fit and the cells they take.
+ */
+function fitLine(text: string, room: number): { text: string; cells: number } {
+  let fitted = "";
+  let used = 0;
+  for (const { segment } of GRAPHEMES.segment(text)) {
+    let size = 0;
+    for (const point of segment.normalize("NFC")) size += pointCells(point);
+    if (used + Math.max(1, size) > room) break;
+    fitted += segment;
+    used += Math.max(1, size);
+  }
+  return { text: fitted, cells: used };
+}
+
 /** Where a call's progress goes on the command line, and how to take it back. */
 interface ProgressLine {
   readonly context: Pick<ToolCallContext, "progress">;
@@ -1037,11 +1073,12 @@ function progressLine(): ProgressLine {
   return {
     context: {
       progress(message, amount) {
-        const room = Math.max(1, (stream.columns || 80) - 1);
-        const graphemes = GRAPHEMES.segment(progressText(message, amount));
-        const text = Array.from(graphemes, ({ segment }) => segment).slice(0, room);
-        stream.write(`\r${text.join("")}${" ".repeat(Math.max(0, width - text.length))}`);
-        width = text.length;
+        const line = fitLine(
+          progressText(message, amount),
+          Math.max(1, (stream.columns || 80) - 1),
+        );
+        stream.write(`\r${line.text}${" ".repeat(Math.max(0, width - line.cells))}`);
+        width = line.cells;
       },
     },
     wipe() {

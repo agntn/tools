@@ -536,6 +536,28 @@ describe("CLI progress", () => {
     });
   });
 
+  it("counts the cells a wide character takes, not the characters", async () => {
+    const wide = defineTool({
+      name: "demo_wide",
+      title: "Wide",
+      description: "Report progress in wide characters.",
+      effect: "read",
+      input: Type.Object({}),
+      execute(_input, { progress }) {
+        progress?.("日本語のテキスト");
+        progress?.("👍🏽 ok");
+        return { content: [{ type: "text", text: "done" }], details: null };
+      },
+    });
+    expect(
+      await runOnTerminal(true, ["wide"], { ...options, tools: [...demoTools, wide] }, 8),
+    ).toEqual({
+      stdout: "done\n",
+      stderr: `\r日本語\r👍🏽 ok\r${" ".repeat(7)}\r`,
+      exitCode: undefined,
+    });
+  });
+
   it("keeps a pipe to the answer alone", async () => {
     expect(await runOnTerminal(false, ["slow"], cli)).toEqual({
       stdout: "done\n",
