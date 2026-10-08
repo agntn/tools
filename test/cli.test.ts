@@ -523,7 +523,7 @@ describe("CLI progress", () => {
   it("rewrites one stderr line on a terminal and wipes it before the answer", async () => {
     expect(await runOnTerminal(true, ["slow"], cli)).toEqual({
       stdout: "done\n",
-      stderr: `\rHashing block 1 (1/2)\rNearly there${" ".repeat(9)}\r${" ".repeat(12)}\r`,
+      stderr: `Hashing block 1 (1/2)\r${" ".repeat(21)}\rNearly there\r${" ".repeat(12)}\r`,
       exitCode: undefined,
     });
   });
@@ -531,12 +531,12 @@ describe("CLI progress", () => {
   it("wipes the line before an error and cuts it to the terminal width", async () => {
     expect(await runOnTerminal(true, ["slow", "--fail"], cli, 8)).toEqual({
       stdout: "",
-      stderr: `\rHashing\rNearly \r${" ".repeat(7)}\rdisk on fire\n`,
+      stderr: `Hashing\r${" ".repeat(7)}\rNearly \r${" ".repeat(7)}\rdisk on fire\n`,
       exitCode: 1,
     });
   });
 
-  it("counts the cells a wide character takes, not the characters", async () => {
+  it("counts the cells wide characters and emoji take, and an empty line clears", async () => {
     const wide = defineTool({
       name: "demo_wide",
       title: "Wide",
@@ -546,6 +546,8 @@ describe("CLI progress", () => {
       execute(_input, { progress }) {
         progress?.("日本語のテキスト");
         progress?.("👍🏽 ok");
+        progress?.("1\uFE0F\u20E32\uFE0F\u20E33\uFE0F\u20E34\uFE0F\u20E3");
+        progress?.("");
         return { content: [{ type: "text", text: "done" }], details: null };
       },
     });
@@ -553,7 +555,7 @@ describe("CLI progress", () => {
       await runOnTerminal(true, ["wide"], { ...options, tools: [...demoTools, wide] }, 8),
     ).toEqual({
       stdout: "done\n",
-      stderr: `\r日本語\r👍🏽 ok\r${" ".repeat(7)}\r`,
+      stderr: `日本語\r${" ".repeat(6)}\r👍🏽 ok\r${" ".repeat(7)}\r1\uFE0F\u20E32\uFE0F\u20E33\uFE0F\u20E3\r${" ".repeat(6)}\r`,
       exitCode: undefined,
     });
   });

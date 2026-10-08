@@ -1011,6 +1011,9 @@ const GRAPHEMES = new Intl.Segmenter();
 const WIDE =
   /^(?:\p{Extended_Pictographic}|[\u1100-\u115F\u231A\u231B\u2329\u232A\u2630-\u2637\u268A-\u268F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DFF\u4E00-\u9FFF\uA000-\uA4CF\uA960-\uA97F\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6\u{16FE0}-\u{18DFF}\u{1AFF0}-\u{1B2FF}\u{1D15E}-\u{1D164}\u{1D1BB}-\u{1D1C0}\u{1D300}-\u{1D376}\u{1F000}-\u{1FAFF}\u{20000}-\u{3FFFD}])$/u;
 
+/** Emoji sequences a terminal draws two cells wide whatever their code points add up to, as `1️⃣`. */
+const EMOJI = /^\p{RGI_Emoji}$/v;
+
 /** Marks that sit on the character before them and take no cell of their own. */
 const ZERO_WIDTH = /^[\p{Mn}\p{Me}]$/u;
 
@@ -1024,6 +1027,16 @@ function pointCells(point: string): number {
 }
 
 /**
+ * @param grapheme - One grapheme.
+ * @returns {number} Cells it takes on a terminal.
+ */
+function graphemeCells(grapheme: string): number {
+  let size = 0;
+  for (const point of grapheme.normalize("NFC")) size += pointCells(point);
+  return Math.max(EMOJI.test(grapheme) ? 2 : 1, size);
+}
+
+/**
  * Counts no fewer cells than Node's ICU, since a short count wraps the line past the wipe.
  *
  * @param text - Line to fit.
@@ -1034,11 +1047,10 @@ function fitLine(text: string, room: number): { text: string; cells: number } {
   let fitted = "";
   let used = 0;
   for (const { segment } of GRAPHEMES.segment(text)) {
-    let size = 0;
-    for (const point of segment.normalize("NFC")) size += pointCells(point);
-    if (used + Math.max(1, size) > room) break;
+    const size = graphemeCells(segment);
+    if (used + size > room) break;
     fitted += segment;
-    used += Math.max(1, size);
+    used += size;
   }
   return { text: fitted, cells: used };
 }
@@ -1070,6 +1082,11 @@ function progressLine(): ProgressLine {
   const stream = process.stderr;
   if (stream.isTTY !== true) return { context: {}, wipe() {} };
   let width = 0;
+  /** Blanks the line and puts the cursor back at its start, where every update leaves it. */
+  const wipe = (): void => {
+    if (width > 0) stream.write(`\r${" ".repeat(width)}\r`);
+    width = 0;
+  };
   return {
     context: {
       progress(message, amount) {
@@ -1077,14 +1094,12 @@ function progressLine(): ProgressLine {
           progressText(message, amount),
           Math.max(1, (stream.columns || 80) - 1),
         );
-        stream.write(`\r${line.text}${" ".repeat(Math.max(0, width - line.cells))}`);
+        wipe();
+        stream.write(line.text);
         width = line.cells;
       },
     },
-    wipe() {
-      if (width > 0) stream.write(`\r${" ".repeat(width)}\r`);
-      width = 0;
-    },
+    wipe,
   };
 }
 
