@@ -21,7 +21,9 @@ import {
   sanitizeLine,
   ToolDefinitionError,
   ToolInputError,
+  type ToolCallContext,
   type ToolDefinition,
+  type ToolProgress,
 } from "./index.ts";
 import type { McpServerInfo } from "./mcp-answers.ts";
 
@@ -37,7 +39,8 @@ export interface CliOptions {
    * a generated command, `mcp` included, takes its place. Bytes are the
    * command's own business: it reads `-` from stdin itself in `execute`, and
    * writes to stdout itself, answering with no content and `cli.json: false`.
-   * A command that prints rows as they land reads `--json` off its {@link CliHost}.
+   * A command that prints rows as they land reads `--json` off its {@link CliHost},
+   * and leaves `progress` alone: on a terminal its line would sit in front of the rows.
    */
   readonly commands?: readonly ToolDefinition[];
   /** Command for an empty command line. */
@@ -1001,6 +1004,53 @@ const JSON_FORGING =
   /* oxlint-disable-next-line no-control-regex */
   /[\u007F-\u009F\u061C\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u206F]/g;
 
+/** Cuts the progress line between characters a terminal draws, so an emoji stays whole. */
+const GRAPHEMES = new Intl.Segmenter();
+
+/** Where a call's progress goes on the command line, and how to take it back. */
+interface ProgressLine {
+  readonly context: Pick<ToolCallContext, "progress">;
+  readonly wipe: () => void;
+}
+
+/**
+ * @param message - Line from the tool, already through `sanitizeLine`.
+ * @param amount - How far it has come.
+ * @returns {string} The line, with `(3/10)` when the tool knows the total.
+ */
+function progressText(message: string, amount?: ToolProgress): string {
+  const { progress, total } = amount ?? { progress: Number.NaN };
+  if (!Number.isFinite(progress) || !Number.isFinite(total)) return message;
+  return `${message} (${progress}/${total})`.trim();
+}
+
+/**
+ * One stderr line that each progress update rewrites in place, wiped before the answer.
+ * Off a terminal there's no line at all, so a pipe or a log gets the answer and nothing else.
+ *
+ * @returns {ProgressLine} The context to hand `invokeTool` and the wipe for after it.
+ */
+function progressLine(): ProgressLine {
+  const stream = process.stderr;
+  if (stream.isTTY !== true) return { context: {}, wipe() {} };
+  let width = 0;
+  return {
+    context: {
+      progress(message, amount) {
+        const room = Math.max(1, (stream.columns || 80) - 1);
+        const graphemes = GRAPHEMES.segment(progressText(message, amount));
+        const text = Array.from(graphemes, ({ segment }) => segment).slice(0, room);
+        stream.write(`\r${text.join("")}${" ".repeat(Math.max(0, width - text.length))}`);
+        width = text.length;
+      },
+    },
+    wipe() {
+      if (width > 0) stream.write(`\r${" ".repeat(width)}\r`);
+      width = 0;
+    },
+  };
+}
+
 /** One command the CLI dispatches to: a tool, a package command or `mcp`. */
 interface Command {
   readonly name: string;
@@ -1028,7 +1078,13 @@ function toolCommand(tool: ToolDefinition): Command {
     json: tool.cli?.json !== false,
     async run(words) {
       const host: CliHost = { cli: true, json: words.json };
-      const result = await invokeTool(tool, toolInput(fields, words.values), { host });
+      const line = progressLine();
+      let result;
+      try {
+        result = await invokeTool(tool, toolInput(fields, words.values), { ...line.context, host });
+      } finally {
+        line.wipe();
+      }
       if (result.isError === true) {
         writeLine("stderr", sanitizeText(resultText(result)));
         process.exitCode = 1;
@@ -1300,8 +1356,8 @@ function exitOnClosedPipe(error: Readonly<NodeJS.ErrnoException>): void {
 }
 
 /**
- * Runs the CLI on `process.argv`. The CLI writes no colors, so nothing
- * depends on the terminal it writes to.
+ * Runs the CLI on `process.argv`. The CLI writes no colors; a terminal on
+ * stderr only gets the progress line, which never reaches a pipe.
  *
  * @param options - CLI options.
  * @param argv - Words after the executable and script.

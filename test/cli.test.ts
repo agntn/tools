@@ -493,6 +493,58 @@ describe("CLI commands", () => {
   });
 });
 
+/* Runs the CLI with stderr on a terminal `columns` wide, or off one. */
+async function runOnTerminal(tty: boolean, argv: readonly string[], cli: CliOptions, columns = 80) {
+  const before = { isTTY: process.stderr.isTTY, columns: process.stderr.columns };
+  Object.assign(process.stderr, { isTTY: tty, columns });
+  try {
+    return await run(argv, cli);
+  } finally {
+    Object.assign(process.stderr, before);
+  }
+}
+
+describe("CLI progress", () => {
+  const slow = defineTool({
+    name: "demo_slow",
+    title: "Slow",
+    description: "Take a while, say so, and fail on request.",
+    effect: "read",
+    input: Type.Object({ fail: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+    execute({ fail }, { progress }) {
+      progress?.("Hashing block 1", { progress: 1, total: 2 });
+      progress?.("Nearly\u001B[2J\nthere");
+      if (fail === true) throw new DemoError("disk on fire");
+      return { content: [{ type: "text", text: "done" }], details: null };
+    },
+  });
+  const cli: CliOptions = { ...options, tools: [...demoTools, slow] };
+
+  it("rewrites one stderr line on a terminal and wipes it before the answer", async () => {
+    expect(await runOnTerminal(true, ["slow"], cli)).toEqual({
+      stdout: "done\n",
+      stderr: `\rHashing block 1 (1/2)\rNearly there${" ".repeat(9)}\r${" ".repeat(12)}\r`,
+      exitCode: undefined,
+    });
+  });
+
+  it("wipes the line before an error and cuts it to the terminal width", async () => {
+    expect(await runOnTerminal(true, ["slow", "--fail"], cli, 8)).toEqual({
+      stdout: "",
+      stderr: `\rHashing\rNearly \r${" ".repeat(7)}\rdisk on fire\n`,
+      exitCode: 1,
+    });
+  });
+
+  it("keeps a pipe to the answer alone", async () => {
+    expect(await runOnTerminal(false, ["slow"], cli)).toEqual({
+      stdout: "done\n",
+      stderr: "",
+      exitCode: undefined,
+    });
+  });
+});
+
 describe("CLI short flags and rest", () => {
   const find = (cli: NonNullable<Parameters<typeof defineTool>[0]["cli"]>) =>
     defineTool({
