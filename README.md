@@ -84,14 +84,15 @@ The typo never reached `execute`. The model gets told what it did wrong and what
 
 ## 🤖 Hosts
 
-| Host   | Adapter                                    | Peer                              |
-| ------ | ------------------------------------------ | --------------------------------- |
-| MCP    | `createMcpServer` from `@agntn/tools/mcp`  | `@modelcontextprotocol/server`    |
-| H3     | `toH3Tools` from `@agntn/tools/h3`         | `h3-mcp`                          |
-| Pi     | `registerPiTools` from `@agntn/tools/pi`   | `@earendil-works/pi-coding-agent` |
-| OMP    | `registerOmpTools` from `@agntn/tools/omp` | `@oh-my-pi/pi-coding-agent`       |
-| AI SDK | `toAiTool` from `@agntn/tools/ai`          | `ai`                              |
-| CLI    | `runCli` from `@agntn/tools/cli`           | none                              |
+| Host   | Adapter                                      | Peer                                |
+| ------ | -------------------------------------------- | ----------------------------------- |
+| MCP    | `createMcpServer` from `@agntn/tools/mcp`    | `@modelcontextprotocol/server`      |
+| H3     | `toH3Tools` from `@agntn/tools/h3`           | `h3-mcp`                            |
+| Docus  | `toToolkitTools` from `@agntn/tools/toolkit` | `zod`, beside `@nuxtjs/mcp-toolkit` |
+| Pi     | `registerPiTools` from `@agntn/tools/pi`     | `@earendil-works/pi-coding-agent`   |
+| OMP    | `registerOmpTools` from `@agntn/tools/omp`   | `@oh-my-pi/pi-coding-agent`         |
+| AI SDK | `toAiTool` from `@agntn/tools/ai`            | `ai`                                |
+| CLI    | `runCli` from `@agntn/tools/cli`             | none                                |
 
 Install only what you ship. An MCP server doesn't need the AI SDK, and nobody makes it pretend. Every host has its own page with the gotchas: [tools.agntn.dev/hosts](https://tools.agntn.dev/hosts).
 

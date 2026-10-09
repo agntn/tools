@@ -14,7 +14,13 @@ import type { ExtensionAPI, ToolDefinition as OmpToolDefinition } from "@oh-my-p
 import { asSchema } from "ai";
 import { H3 } from "h3";
 import { defineMcpHandler } from "h3-mcp";
+import { Client as SdkV1Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport as SdkV1Transport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
+import type { CallToolResult as SdkV1Result } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import type { z } from "zod";
 
 import { toAiTool, toAiTools } from "../src/ai.ts";
 import { ESCAPE_SEQUENCE, stripEscapes } from "../src/escapes.ts";
@@ -37,6 +43,7 @@ import { toH3Tools } from "../src/h3.ts";
 import { callTool, createMcpServer, listTools } from "../src/mcp.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
+import { toToolkitTools, type ToolkitExtra } from "../src/toolkit.ts";
 
 const icon: Icon = {
   src: "https://demo.example/icon.svg",
@@ -375,6 +382,7 @@ describe("one name, one tool", () => {
     ["listTools", () => listTools(twins)],
     ["toAiTools", () => toAiTools(twins)],
     ["toH3Tools", () => toH3Tools({ name: "demo" }, twins)],
+    ["toToolkitTools", () => toToolkitTools({ name: "demo" }, twins)],
     ["registerPiTools", () => registerPiTools(host as unknown as PiExtensionAPI, twins)],
     ["registerOmpTools", () => registerOmpTools(host as unknown as ExtensionAPI, twins, { Text })],
   ])("%s refuses two tools with one name, as createMcpServer does", (_adapter, adapt) => {
@@ -905,6 +913,122 @@ describe("h3-mcp adapter", () => {
 
   it("hands the request's abort signal to the executor", async () => {
     const client = await h3Client();
+    expect(await client.callTool({ name: "demo_signal", arguments: {} })).toEqual({
+      content: [{ type: "text", text: "true" }],
+    });
+  });
+});
+
+/**
+ * An SDK v1 client on an `McpServer` that registers each entry the way the toolkit does.
+ *
+ * The toolkit's own module needs Nitro, so this repeats its `registerToolFromDefinition` call.
+ * Bare SDK v1 types the result tighter than the toolkit does, hence the cast.
+ *
+ * @returns {Promise<SdkV1Client>} Connected client.
+ */
+async function toolkitClient(): Promise<SdkV1Client> {
+  const server = new McpServer({ name: "demo", version: "0.0.0" });
+  for (const tool of toToolkitTools({ name: "demo" }, [echo, slow, signal, count])) {
+    server.registerTool(
+      tool.name,
+      {
+        title: tool.title,
+        description: tool.description,
+        inputSchema: tool.inputSchema as AnySchema,
+        outputSchema: tool.outputSchema as AnySchema | undefined,
+        annotations: tool.annotations,
+        _meta: { ...tool._meta },
+      },
+      async (args: unknown, extra: ToolkitExtra) =>
+        (await tool.handler(args, extra)) as SdkV1Result,
+    );
+  }
+  const [clientTransport, serverTransport] = SdkV1Transport.createLinkedPair();
+  const client = new SdkV1Client({ name: "test", version: "0.0.0" });
+  open.push(client, server);
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  return client;
+}
+
+describe("mcp-toolkit adapter", () => {
+  it("lists what tools/list answers, plus what the toolkit and SDK v1 add on their own", async () => {
+    const client = await toolkitClient();
+    const draft7 = { $schema: "http://json-schema.org/draft-07/schema#" };
+    const expected = listTools([echo, slow, signal, count]).map((tool) => ({
+      name: tool.name,
+      title: tool.title,
+      description: tool.description,
+      inputSchema: { ...draft7, ...tool.inputSchema },
+      ...(tool.outputSchema === undefined
+        ? {}
+        : { outputSchema: { ...draft7, ...tool.outputSchema } }),
+      annotations: tool.annotations,
+      execution: { taskSupport: "forbidden" },
+      _meta: tool._meta ?? {},
+    }));
+    expect((await client.listTools()).tools).toEqual(JSON.parse(JSON.stringify(expected)));
+  });
+
+  it("answers every known tool as the MCP server does, a missing arguments included", async () => {
+    const [toolkit, sdk] = await Promise.all([toolkitClient(), mcpClient()]);
+    const calls: ReadonlyArray<Readonly<Record<string, unknown>> | undefined> = [
+      { word: "hi", mode: "loud" },
+      { word: "fail" },
+      { word: "hi", mode: "x", "bad\nkey": 1 },
+      { word: "boom" },
+      JSON.parse('{"word":"hi","__proto__":{"mode":"loud"}}') as Readonly<Record<string, unknown>>,
+      undefined,
+    ];
+
+    for (const args of calls) {
+      const call = { name: "demo_echo", arguments: args };
+      expect(await toolkit.callTool(call)).toEqual(await sdk.callTool(call));
+    }
+  });
+
+  it("reads a missing arguments as {}, which SDK 1.30 hands Zod as undefined", () => {
+    const [schema] = toToolkitTools({ name: "demo" }, [echo]).map(
+      (tool) => tool.inputSchema as z.ZodType,
+    );
+    expect(schema?.safeParse(undefined)).toEqual({
+      success: true,
+      data: {},
+    });
+  });
+
+  it("sends progress to a client that asked, numbered as the MCP server numbers it", async () => {
+    const client = await toolkitClient();
+    const updates: unknown[] = [];
+    const result = await client.callTool({ name: "demo_slow", arguments: {} }, undefined, {
+      onprogress: (update) => updates.push(update),
+    });
+
+    expect(result).toEqual({ content: [{ type: "text", text: "progress on" }] });
+    expect(updates).toEqual([
+      { progress: 1, message: "warming up" },
+      { progress: 50, total: 100, message: "halfway" },
+      { progress: 51, message: "almost" },
+    ]);
+  });
+
+  it("gives the tool no progress callback when the client didn't ask", async () => {
+    const client = await toolkitClient();
+    expect(await client.callTool({ name: "demo_slow", arguments: {} })).toEqual({
+      content: [{ type: "text", text: "progress off" }],
+    });
+  });
+
+  it("answers a tool with output as the MCP server does, past the SDK's own output check", async () => {
+    const [toolkit, sdk] = await Promise.all([toolkitClient(), mcpClient()]);
+    for (const word of ["hey", "fail", "drift"]) {
+      const call = { name: "demo_count", arguments: { word } };
+      expect(await toolkit.callTool(call)).toEqual(await sdk.callTool(call));
+    }
+  });
+
+  it("hands the request's abort signal to the executor", async () => {
+    const client = await toolkitClient();
     expect(await client.callTool({ name: "demo_signal", arguments: {} })).toEqual({
       content: [{ type: "text", text: "true" }],
     });
