@@ -1098,6 +1098,16 @@ describe("Pi adapter", () => {
     expect(result).toMatchObject({ content: [{ type: "text", text: "hi" }] });
   });
 
+  it("refuses bad input before asking, with the same issues as without a question", async () => {
+    const { asked, ctx } = dialog(true);
+    const thrown = await call(ask, { mode: "quiet" }, ctx).catch((error: unknown) => error);
+    const plain = await invokeTool(echo, { mode: "quiet" }).catch((error: unknown) => error);
+    expect(asked).toEqual([]);
+    expect(thrown instanceof ToolInputError ? thrown.issues : "no ToolInputError").toEqual(
+      plain instanceof ToolInputError ? plain.issues : [],
+    );
+  });
+
   it("refuses on a no without running the call", async () => {
     const { ctx } = dialog(false);
     await expect(call(ask, { word: "boom" }, ctx)).rejects.toThrow(
