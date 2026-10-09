@@ -558,14 +558,13 @@ export async function invokeTool(
   let settled = false;
   const questions = ask ? closedAfter(tool, ask, () => settled) : undefined;
   try {
-    const result = await tool.execute(checked.value, {
+    return await tool.execute(checked.value, {
       ...context,
       ...(progress ? { progress: quietAfter(progress, () => settled) } : {}),
       ...(questions ? { ask: questions.ask } : {}),
     });
-    await questions?.drained();
-    return result;
   } finally {
+    await questions?.drained();
     settled = true;
   }
 }

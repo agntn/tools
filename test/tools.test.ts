@@ -2032,6 +2032,27 @@ describe("a question the tool forgot to wait for", () => {
     expect(seen).toHaveLength(1);
   });
 
+  it("still reaches the client when the tool throws next to it", async () => {
+    const reckless = defineTool({
+      ...hasty,
+      name: "demo_reckless",
+      execute(_input, { ask }): ToolResult<null> {
+        void ask?.({ message: "Pick", schema: Type.Object({ color: Type.String() }) });
+        throw new Error("boom");
+      },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer({ name: "demo", version: "0.0.0" }, [reckless]);
+    const { client, seen } = formClient([{ action: "accept", content: { color: "red" } }]);
+    open.push(server);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    expect(firstText(await client.callTool({ name: "demo_reckless", arguments: {} }))).toBe(
+      "demo_reckless failed: boom",
+    );
+    expect(seen).toHaveLength(1);
+  });
+
   it("keeps the Pi call open until its dialog closes", async () => {
     const registered: PiToolDefinition[] = [];
     const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
