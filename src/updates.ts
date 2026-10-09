@@ -1,5 +1,6 @@
 /** The call context Pi and OMP share: a signal, `onUpdate` for partial results and `ctx`. */
 
+import { dialogAsk } from "./dialogs.ts";
 import type { ToolCallContext, ToolContent } from "./index.ts";
 
 /** A partial result as `onUpdate` takes it in Pi and OMP. */
@@ -11,6 +12,8 @@ export interface PartialResult {
 /**
  * Turns the host's signal, `onUpdate` and `ctx` into a context, one text block per progress line.
  *
+ * `ask` comes along only while `ctx.hasUI` is set: in print mode nobody is there to answer.
+ *
  * @param signal - The call's abort signal, if the host passed one.
  * @param onUpdate - The host's partial result callback, if it passed one.
  * @param host - The host's own context of the call, passed through as `host`.
@@ -21,7 +24,9 @@ export function hostContext(
   onUpdate: ((partial: PartialResult) => void) | undefined,
   host: unknown,
 ): ToolCallContext {
+  const ask = dialogAsk(host, signal);
   return {
+    ...(ask ? { ask } : {}),
     ...(signal ? { signal } : {}),
     ...(host === undefined ? {} : { host }),
     ...(onUpdate

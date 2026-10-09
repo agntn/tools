@@ -37,10 +37,13 @@ import {
   resultText,
   type Icon,
   type ToolCallContext,
+  type ToolDefinition,
   type ToolResult,
 } from "../src/index.ts";
 import { toH3Tools } from "../src/h3.ts";
 import { callTool, createMcpServer, listTools } from "../src/mcp.ts";
+import { callAsking, questionRound } from "../src/mcp-answers.ts";
+import { hostAsk, requestedSchema, type HostQuestion } from "../src/questions.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
 import { toToolkitTools, type ToolkitExtra } from "../src/toolkit.ts";
@@ -583,9 +586,9 @@ afterEach(async () => {
   await Promise.all(open.splice(0).map((connection) => connection.close()));
 });
 
-async function mcpClient(): Promise<Client> {
+async function mcpClient(tools: readonly ToolDefinition[] = [echo, slow, count]): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const server = createMcpServer({ name: "demo", version: "0.0.0" }, [echo, slow, count]);
+  const server = createMcpServer({ name: "demo", version: "0.0.0" }, tools);
   const client = new Client({ name: "test", version: "0.0.0" });
   open.push(client, server);
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -1414,5 +1417,665 @@ describe("Pi adapter", () => {
     expect(() => register({ confirm: { demo_ecko: () => undefined } })).toThrow(
       new ToolDefinitionError('confirm names "demo_ecko", which isn\'t in the tool list'),
     );
+  });
+});
+
+let passes = 0;
+let lateAsk: ToolCallContext["ask"];
+/* Asks for a color, then for the details, and counts how often it starts over. */
+const asker = defineTool({
+  name: "demo_ask",
+  title: "Demo Ask",
+  description: "Ask the user for a color and some details.",
+  effect: "read",
+  input: Type.Object({}),
+  async execute(_input, { ask }): Promise<ToolResult<null>> {
+    passes++;
+    lateAsk = ask;
+    const say = (text: string): ToolResult<null> => ({
+      content: [{ type: "text", text }],
+      details: null,
+    });
+    if (!ask) return say("nobody to ask");
+    const picked = await ask({
+      message: "Pick a color\n\u001B[31mnow‮",
+      schema: Type.Object({ color: Type.Enum(["red", "green"]) }),
+    });
+    if (picked.action !== "accept") return say(`color ${picked.action}`);
+    const details = await ask({ message: "Details", schema: detailsForm });
+    if (details.action !== "accept") return say(`details ${details.action}`);
+    const { count, tags, loud, note } = details.content;
+    return say(
+      `${picked.content.color} x${count} tags=${tags?.join(",") ?? "-"} loud=${loud} note=${note ?? "-"}`,
+    );
+  },
+});
+
+const detailsForm = Type.Object({
+  count: Type.Integer({ minimum: 1, title: "Count" }),
+  tags: Type.Optional(Type.Array(Type.Enum(["a", "b"]))),
+  loud: Type.Boolean(),
+  note: Type.Optional(Type.String({ description: "Anything else" })),
+});
+
+const colorWire = {
+  mode: "form",
+  message: "Pick a color\nnow",
+  requestedSchema: {
+    type: "object",
+    properties: { color: { type: "string", enum: ["red", "green"] } },
+    required: ["color"],
+  },
+};
+
+const replies = [
+  { action: "accept", content: { color: "red" } },
+  { action: "accept", content: { count: 3, tags: ["b"], loud: true } },
+];
+
+/**
+ * A client that fills forms from `script` and keeps each form it was shown in `seen`.
+ *
+ * @param script - Replies in order.
+ * @param pin - Protocol revision to insist on, else the SDK's 2025 default.
+ * @returns {{ client: Client; seen: unknown[] }} Unconnected client and its record.
+ */
+function formClient(script: readonly unknown[], pin?: string): { client: Client; seen: unknown[] } {
+  const client = new Client(
+    { name: "test", version: "0.0.0" },
+    {
+      capabilities: { elicitation: { form: {} } },
+      ...(pin === undefined ? {} : { versionNegotiation: { mode: { pin } } }),
+    },
+  );
+  const seen: unknown[] = [];
+  const left = [...script];
+  client.setRequestHandler("elicitation/create", (request) => {
+    const { _meta: _progress, ...params } = request.params as Record<string, unknown>;
+    seen.push(params);
+    return left.shift() as never;
+  });
+  open.push(client);
+  return { client, seen };
+}
+
+/**
+ * `formClient` on the stdio `Server`, which answers 2025 requests through the SDK's shim.
+ *
+ * @param script - Replies in order.
+ * @returns {Promise<{ client: Client; seen: unknown[] }>} Connected client and its record.
+ */
+async function askingMcpClient(
+  script: readonly unknown[],
+): Promise<{ client: Client; seen: unknown[] }> {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createMcpServer({ name: "demo", version: "0.0.0" }, [asker]);
+  const asking = formClient(script);
+  open.push(server);
+  await Promise.all([server.connect(serverTransport), asking.client.connect(clientTransport)]);
+  return asking;
+}
+
+/**
+ * `formClient` on h3-mcp over Streamable HTTP.
+ *
+ * @param script - Replies in order.
+ * @param pin - Protocol revision to insist on.
+ * @returns {Promise<{ client: Client; seen: unknown[] }>} Connected client and its record.
+ */
+async function askingH3Client(
+  script: readonly unknown[],
+  pin?: string,
+): Promise<{ client: Client; seen: unknown[] }> {
+  const app = new H3().all(
+    "/mcp",
+    defineMcpHandler({
+      name: "demo",
+      version: "0.0.0",
+      tools: toH3Tools({ name: "demo" }, [asker]),
+    }),
+  );
+  const transport = new StreamableHTTPClientTransport(new URL("http://localhost/mcp"), {
+    fetch: async (input, init) => app.fetch(new Request(input, init)),
+  });
+  const asking = formClient(script, pin);
+  await asking.client.connect(transport);
+  return asking;
+}
+
+/* One pass of `demo_ask` over MCP with what a client would send back. */
+async function roundTrip(
+  responses: Readonly<Record<string, unknown>> | undefined,
+  state: string | undefined,
+) {
+  return await callAsking(
+    { name: "demo" },
+    [asker],
+    "demo_ask",
+    {},
+    {},
+    questionRound(responses, state),
+  );
+}
+
+/* The `requestState` of an `input_required` answer. */
+function stateOf(result: unknown): string {
+  return String((result as { requestState?: unknown }).requestState);
+}
+
+/* The `inputRequests` of an `input_required` answer. */
+function inputRequestsOf(result: unknown): Record<string, unknown> {
+  return (result as { inputRequests?: Record<string, unknown> }).inputRequests ?? {};
+}
+
+/* The text of a tool call's first block. */
+function firstText(result: unknown): string {
+  const [block] = (result as { content: Array<{ text?: string }> }).content;
+  return block?.text ?? "";
+}
+
+describe("questions", () => {
+  it("cleans the message, sends the form MCP takes and keeps only the fields it asked for", async () => {
+    const shown: HostQuestion[] = [];
+    const ask = hostAsk(async (question) => {
+      shown.push(question);
+      return { action: "accept", content: { color: "green", evil: "\u001B]0;x\u0007" } };
+    });
+    const answer = await ask({
+      message: "Pick a color\n\u001B[31mnow‮",
+      schema: Type.Object({ color: Type.Enum(["red", "green"]) }),
+    });
+
+    expect(answer).toEqual({ action: "accept", content: { color: "green" } });
+    expect(shown.map(({ message, requested }) => ({ message, requested }))).toEqual([
+      { message: colorWire.message, requested: colorWire.requestedSchema },
+    ]);
+  });
+
+  it("puts each field label on one clean line and leaves the values alone", () => {
+    const hostile = "Pick\n\u001B]0;x\u0007one\u202E";
+    const field = Type.Enum(["a\nb"], { title: hostile, description: hostile });
+    expect(
+      requestedSchema({ message: "", schema: Type.Object({ pick: field }) }).properties,
+    ).toEqual({
+      pick: { type: "string", enum: ["a\nb"], title: "Pick one", description: "Pick one" },
+    });
+  });
+
+  it("cleans the labels of a multiple pick's items and of titled choices too", () => {
+    const hostile = "Pick\n\u001B]0;x\u0007one\u202E";
+    const tags = Type.Array(Type.Enum(["a"], { title: hostile }));
+    const titled = Type.Unsafe<string>({
+      type: "string",
+      oneOf: [{ const: "a", title: hostile }],
+    });
+    const { properties } = requestedSchema({
+      message: "",
+      schema: Type.Object({ tags, titled }),
+    });
+
+    expect(properties.tags).toEqual({
+      type: "array",
+      items: { type: "string", enum: ["a"], title: "Pick one" },
+    });
+    expect(properties.titled).toEqual({
+      type: "string",
+      oneOf: [{ const: "a", title: "Pick one" }],
+    });
+  });
+
+  it("refuses a rule on the form's root, which no MCP form can carry", () => {
+    const schema = Type.Object({ a: Type.Optional(Type.String()) }, { minProperties: 1 });
+    expect(() => requestedSchema({ message: "", schema })).toThrow(
+      new ToolDefinitionError(
+        'A question can\'t carry "minProperties" on its Type.Object: an MCP form has no place for it',
+      ),
+    );
+  });
+
+  it("types the items of a multiple pick and passes every other field through", () => {
+    const suggested = Type.Object({ color: Type.String({ "x-openai-suggestions": ["red"] }) });
+    expect(requestedSchema({ message: "", schema: suggested }).properties).toEqual({
+      color: { type: "string", "x-openai-suggestions": ["red"] },
+    });
+    expect(requestedSchema({ message: "", schema: detailsForm })).toEqual({
+      type: "object",
+      properties: {
+        count: { type: "integer", minimum: 1, title: "Count" },
+        tags: { type: "array", items: { type: "string", enum: ["a", "b"] } },
+        loud: { type: "boolean" },
+        note: { type: "string", description: "Anything else" },
+      },
+      required: ["count", "loud"],
+    });
+  });
+
+  it("refuses a form elicitation can't show before anyone sees it", async () => {
+    let asked = false;
+    const ask = hostAsk(async () => {
+      asked = true;
+      return { action: "cancel" };
+    });
+    const nested = Type.Object({ point: Type.Object({ x: Type.Number() }) });
+
+    await expect(ask({ message: "Where?", schema: nested })).rejects.toThrow(
+      new ToolDefinitionError(
+        'Question field "point" must be a string, number, integer, boolean, Type.Enum of strings or an array of one',
+      ),
+    );
+    expect(asked).toBe(false);
+  });
+
+  it("refuses a reply that doesn't fit, and takes a no or a closed form as they are", async () => {
+    const ask = (reply: unknown) =>
+      hostAsk(async () => reply)({ message: "How many?", schema: detailsForm });
+
+    await expect(ask({ action: "accept", content: { count: 0, loud: true } })).rejects.toThrow(
+      "The answer doesn't fit the question",
+    );
+    await expect(ask({ action: "maybe" })).rejects.toThrow("The answer doesn't fit the question");
+    expect(await ask({ action: "decline", content: { count: 0 } })).toEqual({ action: "decline" });
+    expect(await ask({ action: "cancel" })).toEqual({ action: "cancel" });
+  });
+
+  it("rejects a question once the call has answered", async () => {
+    const result = await invokeTool(asker, {}, { ask: async () => ({ action: "cancel" }) });
+
+    expect(resultText(result)).toBe("color cancel");
+    await expect(lateAsk?.({ message: "Still there?", schema: Type.Object({}) })).rejects.toThrow(
+      "demo_ask asked a question after its call had answered",
+    );
+  });
+
+  it("is absent where nobody can answer", async () => {
+    expect(resultText(await invokeTool(asker, {}))).toBe("nobody to ask");
+  });
+
+  it("replays every answer so far and stops at the first question still out", async () => {
+    const first = await roundTrip(undefined, undefined);
+    const second = await roundTrip({ "ask-0": replies[0] }, stateOf(first));
+    const last = await roundTrip({ "ask-1": replies[1] }, stateOf(second));
+
+    expect(Object.keys(inputRequestsOf(first))).toEqual(["ask-0"]);
+    expect(Object.keys(inputRequestsOf(second))).toEqual(["ask-1"]);
+    expect(firstText(last)).toBe("red x3 tags=b loud=true note=-");
+  });
+
+  it("asks again past a replayed answer that doesn't fit, as from a tampered state", async () => {
+    const first = await roundTrip(undefined, undefined);
+    const second = await roundTrip({ "ask-0": replies[0] }, stateOf(first));
+    const state = JSON.parse(stateOf(second)) as { answers: Array<{ a: unknown }> };
+    const [entry] = state.answers;
+    if (entry) entry.a = { action: "accept", content: { color: "blue" } };
+    const tampered = await roundTrip({ "ask-1": replies[1] }, JSON.stringify(state));
+
+    expect(inputRequestsOf(tampered)).toEqual({
+      "ask-0": { method: "elicitation/create", params: colorWire },
+    });
+  });
+
+  it("asks again when the question changed since the answer came", async () => {
+    let target = "A";
+    const apply = defineTool({
+      name: "demo_apply",
+      title: "Demo Apply",
+      description: "Ask before applying to the current target.",
+      effect: "write",
+      input: Type.Object({}),
+      async execute(_input, { ask }): Promise<ToolResult<null>> {
+        const answer = await ask?.({ message: `Apply to ${target}?`, schema: Type.Object({}) });
+        return { content: [{ type: "text", text: `applied ${answer?.action}` }], details: null };
+      },
+    });
+    const call = async (responses?: Readonly<Record<string, unknown>>, state?: string) =>
+      await callAsking(
+        { name: "demo" },
+        [apply],
+        "demo_apply",
+        {},
+        {},
+        questionRound(responses, state),
+      );
+
+    const asked = await call();
+    target = "B";
+    const again = await call({ "ask-0": { action: "accept", content: {} } }, stateOf(asked));
+
+    expect(JSON.stringify(inputRequestsOf(again))).toContain("Apply to B?");
+  });
+
+  it("asks a stdio client with elicitation, the call starting over for each answer", async () => {
+    const { client, seen } = await askingMcpClient(replies);
+    passes = 0;
+    const result = await client.callTool({ name: "demo_ask", arguments: {} });
+
+    expect(firstText(result)).toBe("red x3 tags=b loud=true note=-");
+    expect(passes).toBe(3);
+    expect(seen).toEqual([
+      colorWire,
+      {
+        mode: "form",
+        message: "Details",
+        requestedSchema: requestedSchema({ message: "", schema: detailsForm }),
+      },
+    ]);
+  });
+
+  it("takes a decline from a stdio client as the answer", async () => {
+    const { client } = await askingMcpClient([{ action: "decline" }]);
+    expect(firstText(await client.callTool({ name: "demo_ask", arguments: {} }))).toBe(
+      "color decline",
+    );
+  });
+
+  it("asks a stdio client again when its reply doesn't fit the form", async () => {
+    const { client, seen } = await askingMcpClient([
+      { action: "accept", content: { color: "blue" } },
+      ...replies,
+    ]);
+    const result = await client.callTool({ name: "demo_ask", arguments: {} });
+
+    expect(firstText(result)).toBe("red x3 tags=b loud=true note=-");
+    expect(seen.slice(0, 2)).toEqual([colorWire, colorWire]);
+  });
+
+  it("gives no ask to a client without elicitation", async () => {
+    const client = await mcpClient([asker]);
+    expect(firstText(await client.callTool({ name: "demo_ask", arguments: {} }))).toBe(
+      "nobody to ask",
+    );
+  });
+
+  it("asks over h3-mcp on the 2026 revision, the call starting over for each answer", async () => {
+    const { client, seen } = await askingH3Client(replies, "2026-07-28");
+    passes = 0;
+    const result = await client.callTool({ name: "demo_ask", arguments: {} });
+
+    expect(firstText(result)).toBe("red x3 tags=b loud=true note=-");
+    expect(passes).toBe(3);
+    expect(seen[0]).toEqual(colorWire);
+  });
+
+  it("gives no ask over h3-mcp on a 2025 request, which has no way to carry one", async () => {
+    const { client } = await askingH3Client(replies);
+    expect(firstText(await client.callTool({ name: "demo_ask", arguments: {} }))).toBe(
+      "nobody to ask",
+    );
+  });
+});
+
+/**
+ * A `ctx` whose dialogs answer from `script` and record what they drew.
+ *
+ * @param script - Answers in order; `undefined` is Escape.
+ * @param hasUI - Whether the host has a UI right now.
+ * @returns {{ drawn: string[]; ctx: object }} The record and the context.
+ */
+function scriptedCtx(script: ReadonlyArray<string | undefined>, hasUI = true) {
+  const drawn: string[] = [];
+  const left = [...script];
+  const ui = {
+    select: async (
+      title: string,
+      options: readonly string[],
+      dialog?: Readonly<{ signal?: AbortSignal }>,
+    ) => {
+      drawn.push(`select ${title} [${options.join(" | ")}]${dialog?.signal ? " signal" : ""}`);
+      return left.shift();
+    },
+    input: async (title: string, placeholder?: string) => {
+      drawn.push(`input ${title} (${placeholder ?? ""})`);
+      return left.shift();
+    },
+    notify: (message: string, type?: string) => {
+      drawn.push(`notify ${type ?? "info"} ${message}`);
+    },
+  };
+  return { drawn, ctx: { hasUI, ui } };
+}
+
+/* Registers `demo_ask` on a Pi double and hands back its definition. */
+function piAsker(): PiToolDefinition {
+  const registered: PiToolDefinition[] = [];
+  const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+  registerPiTools(pi as unknown as PiExtensionAPI, [asker]);
+  const [tool] = registered;
+  if (!tool) throw new Error("nothing registered");
+  return tool;
+}
+
+describe("questions in Pi and OMP", () => {
+  const filled = ["red", "0", "3", "[ ] a", "Done", "Yes", ""];
+
+  it("asks for each field through ctx.ui and names a value the field refuses", async () => {
+    const { drawn, ctx } = scriptedCtx(filled);
+    const result = await piAsker().execute(
+      "call-1",
+      {},
+      new AbortController().signal,
+      undefined,
+      ctx as never,
+    );
+
+    expect(resultText(result as ToolResult)).toBe("red x3 tags=a loud=true note=-");
+    expect(drawn).toEqual([
+      "select Pick a color now [red | green] signal",
+      "input Details: Count ()",
+      "notify warning Count: must be >= 1",
+      "input Details: Count ()",
+      "select Details: tags [[ ] a | [ ] b | Done | (skip)] signal",
+      "select Details: tags [[x] a | [ ] b | Done | (skip)] signal",
+      "select Details: loud [Yes | No] signal",
+      "input Details: note (Anything else)",
+    ]);
+  });
+
+  it("asks again for a line the list never had, instead of leaving a required field out", async () => {
+    const { drawn, ctx } = scriptedCtx(["blue", "red", undefined]);
+    await piAsker().execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(drawn.slice(0, 3)).toEqual([
+      "select Pick a color now [red | green]",
+      "notify warning color: must be one of red, green",
+      "select Pick a color now [red | green]",
+    ]);
+  });
+
+  it("tells apart two values that clean to the same line", async () => {
+    const twins = defineTool({
+      ...asker,
+      name: "demo_twins",
+      async execute(_input, { ask }): Promise<ToolResult<null>> {
+        const answer = await ask?.({
+          message: "Which?",
+          schema: Type.Object({ pick: Type.Enum(["a\nb", "a b"]) }),
+        });
+        const text = answer?.action === "accept" ? JSON.stringify(answer.content.pick) : "none";
+        return { content: [{ type: "text", text }], details: null };
+      },
+    });
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [twins]);
+    const { drawn, ctx } = scriptedCtx(["a b (2)"]);
+    const result = await registered[0]?.execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(drawn).toEqual(["select Which? [a b | a b (2)]"]);
+    expect(resultText(result as ToolResult)).toBe('"a b"');
+  });
+
+  it("leaves an optional multiple pick out on (skip), not as an empty list", async () => {
+    const { ctx } = scriptedCtx(["red", "3", "[ ] a", "(skip)", "No", "hi"]);
+    const result = await piAsker().execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(resultText(result as ToolResult)).toBe("red x3 tags=- loud=false note=hi");
+  });
+
+  it("keeps a field named __proto__ as a field", async () => {
+    const odd = defineTool({
+      ...asker,
+      name: "demo_odd",
+      async execute(_input, { ask }): Promise<ToolResult<null>> {
+        const answer = await ask?.({
+          message: "Odd",
+          schema: Type.Object({ ["__proto__"]: Type.String() }),
+        });
+        const text = answer?.action === "accept" ? JSON.stringify(answer.content) : "none";
+        return { content: [{ type: "text", text }], details: null };
+      },
+    });
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [odd]);
+    const { ctx } = scriptedCtx(["x"]);
+    const result = await registered[0]?.execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(resultText(result as ToolResult)).toBe('{"__proto__":"x"}');
+  });
+
+  it("closes the whole form on Escape", async () => {
+    const { drawn, ctx } = scriptedCtx(["red", undefined]);
+    const result = await piAsker().execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(resultText(result as ToolResult)).toBe("details cancel");
+    expect(drawn).toHaveLength(2);
+  });
+
+  it("asks nobody without a UI", async () => {
+    const { drawn, ctx } = scriptedCtx(filled, false);
+    const result = await piAsker().execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(resultText(result as ToolResult)).toBe("nobody to ask");
+    expect(drawn).toEqual([]);
+  });
+
+  it("draws the same dialogs in OMP", async () => {
+    const registered: OmpToolDefinition[] = [];
+    const pi = {
+      typebox: { Type: { Unsafe: (document: unknown) => document } },
+      registerTool: (definition: OmpToolDefinition) => registered.push(definition),
+    };
+    registerOmpTools(pi as unknown as ExtensionAPI, [asker], {
+      Text: class {} as unknown as OmpToolOptions["Text"],
+    });
+    const { drawn, ctx } = scriptedCtx(filled);
+    const result = await registered[0]?.execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(resultText(result as ToolResult)).toBe("red x3 tags=a loud=true note=-");
+    expect(drawn).toHaveLength(8);
+  });
+});
+
+let writes = 0;
+/* Swallows every error around its question, then writes: the shape that must not run early. */
+const careless = defineTool({
+  name: "demo_careless",
+  title: "Demo Careless",
+  description: "Ask, shrug off any failure, then write.",
+  effect: "write",
+  input: Type.Object({}),
+  async execute(_input, { ask, signal }): Promise<ToolResult<null>> {
+    let color = "none";
+    try {
+      const answer = await ask?.({
+        message: "Pick",
+        schema: Type.Object({ color: Type.String() }),
+      });
+      if (answer?.action === "accept") color = answer.content.color;
+    } catch {}
+    writes++;
+    return {
+      content: [{ type: "text", text: `${color} ${String(signal?.aborted)}` }],
+      details: null,
+    };
+  },
+});
+
+describe("a question nobody has answered yet", () => {
+  it("holds the call where it asked, so a caught error can't run the write early", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer({ name: "demo", version: "0.0.0" }, [careless]);
+    const { client } = formClient([{ action: "accept", content: { color: "red" } }]);
+    open.push(server);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    writes = 0;
+
+    expect(firstText(await client.callTool({ name: "demo_careless", arguments: {} }))).toBe(
+      "red false",
+    );
+    expect(writes).toBe(1);
+  });
+});
+
+/* Starts a question and returns without waiting for it, the bug a missing `await` makes. */
+const hasty = defineTool({
+  name: "demo_hasty",
+  title: "Demo Hasty",
+  description: "Ask and forget to wait.",
+  effect: "read",
+  input: Type.Object({}),
+  execute(_input, { ask }): ToolResult<null> {
+    void ask?.({ message: "Pick", schema: Type.Object({ color: Type.String() }) });
+    return { content: [{ type: "text", text: "done" }], details: null };
+  },
+});
+
+describe("a question the tool forgot to wait for", () => {
+  it("still reaches the client before the call answers", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer({ name: "demo", version: "0.0.0" }, [hasty]);
+    const { client, seen } = formClient([{ action: "accept", content: { color: "red" } }]);
+    open.push(server);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    expect(firstText(await client.callTool({ name: "demo_hasty", arguments: {} }))).toBe("done");
+    expect(seen).toHaveLength(1);
+  });
+
+  it("still reaches the client when the tool throws next to it", async () => {
+    const reckless = defineTool({
+      ...hasty,
+      name: "demo_reckless",
+      execute(_input, { ask }): ToolResult<null> {
+        void ask?.({ message: "Pick", schema: Type.Object({ color: Type.String() }) });
+        throw new Error("boom");
+      },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer({ name: "demo", version: "0.0.0" }, [reckless]);
+    const { client, seen } = formClient([{ action: "accept", content: { color: "red" } }]);
+    open.push(server);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    expect(firstText(await client.callTool({ name: "demo_reckless", arguments: {} }))).toBe(
+      "demo_reckless failed: boom",
+    );
+    expect(seen).toHaveLength(1);
+  });
+
+  it("swallows nothing it hands out: a refused question left unawaited stays handled", async () => {
+    const sloppy = defineTool({
+      ...hasty,
+      name: "demo_sloppy",
+      execute(_input, { ask }): ToolResult<null> {
+        const nested = Type.Object({ point: Type.Object({ x: Type.Number() }) });
+        void ask?.({ message: "Where?", schema: nested });
+        return { content: [{ type: "text", text: "done" }], details: null };
+      },
+    });
+    const ask = hostAsk(async () => ({ action: "cancel" }));
+
+    expect(resultText(await invokeTool(sloppy, {}, { ask }))).toBe("done");
+  });
+
+  it("keeps the Pi call open until its dialog closes", async () => {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [hasty]);
+    const { drawn, ctx } = scriptedCtx(["red"]);
+    const result = await registered[0]?.execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(resultText(result as ToolResult)).toBe("done");
+    expect(drawn).toEqual(["input Pick ()"]);
   });
 });

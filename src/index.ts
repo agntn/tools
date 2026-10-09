@@ -28,6 +28,7 @@ export type * from "typebox";
 import { Value } from "typebox/value";
 
 import { stripEscapes } from "./escapes.ts";
+import { problemText } from "./failures.ts";
 
 export { sanitizeText } from "./escapes.ts";
 
@@ -85,6 +86,24 @@ export interface ToolProgress {
   readonly total?: number;
 }
 
+/** A small form for the user: one message over flat fields, the shape MCP elicitation takes. */
+export interface ToolQuestion<Schema extends TObject = TObject> {
+  /** What the user reads above the fields. Lines and tabs survive, escapes don't. */
+  readonly message: string;
+  /** Strings, numbers, booleans, `Type.Enum` picks and arrays of such an enum. Nothing nested. */
+  readonly schema: Schema;
+}
+
+/** What came back: the checked fields on `accept`, nothing on a "no" or a closed form. */
+export type ToolAnswer<Content> =
+  | { readonly action: "accept"; readonly content: Content }
+  | { readonly action: "decline" | "cancel" };
+
+/** Puts a {@link ToolQuestion} in front of the user and waits for the {@link ToolAnswer}. */
+export type ToolAsk = <Schema extends TObject>(
+  question: ToolQuestion<Schema>,
+) => Promise<ToolAnswer<Static<Schema>>>;
+
 /** An MCP icon, the SDK's own shape: a URL or `data:` URI a client can draw on its card. */
 export interface Icon {
   readonly src: string;
@@ -100,6 +119,13 @@ export interface ToolCallContext {
   signal?: AbortSignal;
   /** Says the call is still at it. Absent where the host can't show it, so call `progress?.()`. */
   progress?: (message: string, amount?: ToolProgress) => void;
+  /**
+   * Asks the user and waits. Absent where nobody can answer, so check before calling.
+   *
+   * Over MCP the call starts over from the top for each answer, the earlier ones
+   * replayed, so ask before the first effect and in the same order every time.
+   */
+  ask?: ToolAsk;
   /** Pi's or OMP's own `ctx`, the CLI's `CliHost`, nothing elsewhere. Narrow it yourself. */
   host?: unknown;
 }
@@ -385,8 +411,7 @@ export function validateInput<Input extends TObject>(
  * @returns {InputIssue} The failure, with the allowed values when an enum failed.
  */
 function errorIssue(at: string, message: string, params: unknown): InputIssue {
-  const allowed = isNode(params) ? params.allowedValues : undefined;
-  const problem = Array.isArray(allowed) ? `must be one of ${allowed.join(", ")}` : message;
+  const problem = problemText(message, params);
   const issue = { line: `Invalid arguments at ${at || "/"}: ${problem}`, at, problem };
   const missing = isNode(params) ? params.requiredProperties : undefined;
   return Array.isArray(missing) ? { ...issue, missing: missing.map(String) } : issue;
@@ -511,7 +536,8 @@ function schemaAt(root: SchemaNode, pointer: string): SchemaNode | undefined {
  * Validates and runs a tool. Every adapter calls through here.
  *
  * Progress is best effort: a line after the call settles goes nowhere, and a host that throws on
- * one doesn't fail the call.
+ * one doesn't fail the call. The call answers once every question it started has settled, and a
+ * question after that point rejects: nobody waits for the answer.
  *
  * @param tool - Tool to run.
  * @param args - Arguments as received from the host.
@@ -526,23 +552,78 @@ export async function invokeTool(
 ): Promise<ToolResult> {
   const checked = validateInput(tool, args);
   if (!checked.ok) throw new ToolInputError(checked.lines, checked.issues);
-  const { progress } = context;
-  if (!progress) return await tool.execute(checked.value, context);
+  const { progress, ask } = context;
+  if (!progress && !ask) return await tool.execute(checked.value, context);
 
   let settled = false;
+  const questions = ask ? closedAfter(tool, ask, () => settled) : undefined;
   try {
     return await tool.execute(checked.value, {
       ...context,
-      progress(message, amount) {
-        if (settled) return;
-        try {
-          progress(sanitizeLine(message), amount);
-        } catch {}
-      },
+      ...(progress ? { progress: quietAfter(progress, () => settled) } : {}),
+      ...(questions ? { ask: questions.ask } : {}),
     });
   } finally {
+    await questions?.drained();
     settled = true;
   }
+}
+
+/**
+ * Progress that cleans each line, drops it once the call has settled and never throws.
+ *
+ * @param progress - The host's callback.
+ * @param settled - Whether the call has answered.
+ * @returns {NonNullable<ToolCallContext["progress"]>} The callback `execute` gets.
+ */
+function quietAfter(
+  progress: NonNullable<ToolCallContext["progress"]>,
+  settled: () => boolean,
+): NonNullable<ToolCallContext["progress"]> {
+  return (message, amount) => {
+    if (settled()) return;
+    try {
+      progress(sanitizeLine(message), amount);
+    } catch {}
+  };
+}
+
+/** The questions of one call: the `ask` for `execute`, and a wait for every one it started. */
+interface CallQuestions {
+  readonly ask: ToolAsk;
+  readonly drained: () => Promise<void>;
+}
+
+/**
+ * Questions that reject once the call has settled instead of opening a form nobody reads.
+ *
+ * Each one stays open until it settles, and the call answers only after that,
+ * so a question a tool forgot to `await` still reaches the person. The promise it tracks is
+ * the one `execute` gets, so a refusal nobody awaited never turns into an unhandled rejection.
+ *
+ * @param tool - Tool being called.
+ * @param ask - The host's question.
+ * @param settled - Whether the call has answered.
+ * @returns {CallQuestions} The question `execute` gets, and the wait for the open ones.
+ */
+function closedAfter(tool: ToolDefinition, ask: ToolAsk, settled: () => boolean): CallQuestions {
+  const open = new Set<Promise<unknown>>();
+  const asked: ToolAsk = async (question) => {
+    if (settled()) throw new Error(`${tool.name} asked a question after its call had answered`);
+    return await ask(question);
+  };
+  return {
+    ask: (question) => {
+      const answer = asked(question);
+      const release = (): void => void open.delete(answer);
+      open.add(answer);
+      answer.then(release, release);
+      return answer;
+    },
+    drained: async () => {
+      while (open.size > 0) await Promise.allSettled(open);
+    },
+  };
 }
 
 const LINE_BREAKING = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
