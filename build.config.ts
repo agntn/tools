@@ -14,6 +14,7 @@ export default defineBuildConfig({
         "./src/ai.ts",
         "./src/cli.ts",
       ],
+      dts: { sourcemap: false },
     },
   ],
 });
