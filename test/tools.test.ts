@@ -2006,3 +2006,40 @@ describe("a question nobody has answered yet", () => {
     expect(writes).toBe(1);
   });
 });
+
+/* Starts a question and returns without waiting for it, the bug a missing `await` makes. */
+const hasty = defineTool({
+  name: "demo_hasty",
+  title: "Demo Hasty",
+  description: "Ask and forget to wait.",
+  effect: "read",
+  input: Type.Object({}),
+  execute(_input, { ask }): ToolResult<null> {
+    void ask?.({ message: "Pick", schema: Type.Object({ color: Type.String() }) });
+    return { content: [{ type: "text", text: "done" }], details: null };
+  },
+});
+
+describe("a question the tool forgot to wait for", () => {
+  it("still reaches the client before the call answers", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer({ name: "demo", version: "0.0.0" }, [hasty]);
+    const { client, seen } = formClient([{ action: "accept", content: { color: "red" } }]);
+    open.push(server);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    expect(firstText(await client.callTool({ name: "demo_hasty", arguments: {} }))).toBe("done");
+    expect(seen).toHaveLength(1);
+  });
+
+  it("keeps the Pi call open until its dialog closes", async () => {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [hasty]);
+    const { drawn, ctx } = scriptedCtx(["red"]);
+    const result = await registered[0]?.execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(resultText(result as ToolResult)).toBe("done");
+    expect(drawn).toEqual(["input Pick ()"]);
+  });
+});

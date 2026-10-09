@@ -536,7 +536,8 @@ function schemaAt(root: SchemaNode, pointer: string): SchemaNode | undefined {
  * Validates and runs a tool. Every adapter calls through here.
  *
  * Progress is best effort: a line after the call settles goes nowhere, and a host that throws on
- * one doesn't fail the call. A question after that point rejects: nobody waits for the answer.
+ * one doesn't fail the call. The call answers once every question it started has settled, and a
+ * question after that point rejects: nobody waits for the answer.
  *
  * @param tool - Tool to run.
  * @param args - Arguments as received from the host.
@@ -555,12 +556,15 @@ export async function invokeTool(
   if (!progress && !ask) return await tool.execute(checked.value, context);
 
   let settled = false;
+  const questions = ask ? closedAfter(tool, ask, () => settled) : undefined;
   try {
-    return await tool.execute(checked.value, {
+    const result = await tool.execute(checked.value, {
       ...context,
       ...(progress ? { progress: quietAfter(progress, () => settled) } : {}),
-      ...(ask ? { ask: closedAfter(tool, ask, () => settled) } : {}),
+      ...(questions ? { ask: questions.ask } : {}),
     });
+    await questions?.drained();
+    return result;
   } finally {
     settled = true;
   }
@@ -585,18 +589,39 @@ function quietAfter(
   };
 }
 
+/** The questions of one call: the `ask` for `execute`, and a wait for every one it started. */
+interface CallQuestions {
+  readonly ask: ToolAsk;
+  readonly drained: () => Promise<void>;
+}
+
 /**
- * A question that rejects once the call has settled instead of opening a form nobody reads.
+ * Questions that reject once the call has settled instead of opening a form nobody reads.
+ *
+ * Each one stays open until it settles, and the call answers only after that,
+ * so a question a tool forgot to `await` still reaches the person.
  *
  * @param tool - Tool being called.
  * @param ask - The host's question.
  * @param settled - Whether the call has answered.
- * @returns {ToolAsk} The question `execute` gets.
+ * @returns {CallQuestions} The question `execute` gets, and the wait for the open ones.
  */
-function closedAfter(tool: ToolDefinition, ask: ToolAsk, settled: () => boolean): ToolAsk {
-  return async (question) => {
-    if (settled()) throw new Error(`${tool.name} asked a question after its call had answered`);
-    return await ask(question);
+function closedAfter(tool: ToolDefinition, ask: ToolAsk, settled: () => boolean): CallQuestions {
+  const open = new Set<Promise<unknown>>();
+  return {
+    ask: async (question) => {
+      if (settled()) throw new Error(`${tool.name} asked a question after its call had answered`);
+      const answer = ask(question);
+      open.add(answer);
+      try {
+        return await answer;
+      } finally {
+        open.delete(answer);
+      }
+    },
+    drained: async () => {
+      while (open.size > 0) await Promise.allSettled(open);
+    },
   };
 }
 
