@@ -1911,6 +1911,28 @@ describe("questions in Pi and OMP", () => {
     expect(resultText(result as ToolResult)).toBe("red x3 tags=- loud=false note=hi");
   });
 
+  it("keeps a field named __proto__ as a field", async () => {
+    const odd = defineTool({
+      ...asker,
+      name: "demo_odd",
+      async execute(_input, { ask }): Promise<ToolResult<null>> {
+        const answer = await ask?.({
+          message: "Odd",
+          schema: Type.Object({ ["__proto__"]: Type.String() }),
+        });
+        const text = answer?.action === "accept" ? JSON.stringify(answer.content) : "none";
+        return { content: [{ type: "text", text }], details: null };
+      },
+    });
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [odd]);
+    const { ctx } = scriptedCtx(["x"]);
+    const result = await registered[0]?.execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(resultText(result as ToolResult)).toBe('{"__proto__":"x"}');
+  });
+
   it("closes the whole form on Escape", async () => {
     const { drawn, ctx } = scriptedCtx(["red", undefined]);
     const result = await piAsker().execute("call-1", {}, undefined, undefined, ctx as never);
