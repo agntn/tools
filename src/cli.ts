@@ -86,6 +86,8 @@ interface Field {
   readonly flag: string;
   readonly kind: FieldKind;
   readonly positional: boolean;
+  /** A dashed word that lands here fails as an unknown option instead. */
+  readonly plain: boolean;
   /** Takes the words the other positionals leave, so it's always the last one. */
   readonly rest: boolean;
   /** Items of a `rest` array, where each word stays one item instead of joining the others. */
@@ -183,6 +185,7 @@ function takesText(branch: SchemaNode): boolean {
 interface CliHints {
   /** The `positional` hint with `rest` at the end. */
   readonly positional: readonly string[];
+  readonly plain: readonly string[];
   readonly rest: readonly string[];
   readonly short: Readonly<Record<string, string>>;
   readonly stdin: readonly string[];
@@ -198,22 +201,38 @@ function cliHints(tool: ToolDefinition): CliHints {
   const rest = cli.rest === undefined ? [] : [cli.rest];
   const hints = {
     positional: [...(cli.positional ?? []), ...rest],
+    plain: cli.plain ?? [],
     rest,
     short: cli.short ?? {},
     stdin: cli.stdin ?? [],
   };
   const properties = tool.input.properties as Readonly<Record<string, unknown>>;
-  for (const key of [...hints.positional, ...Object.keys(hints.short), ...hints.stdin]) {
+  const named = [...hints.positional, ...hints.plain, ...Object.keys(hints.short), ...hints.stdin];
+  for (const key of named) {
     if (!Object.hasOwn(properties, key)) {
       throw new ToolDefinitionError(`${tool.name}: cli hint names unknown property ${key}`);
     }
   }
+  assertPositionals(tool, hints);
+  return hints;
+}
+
+/**
+ * @param tool - Tool the hints belong to.
+ * @param hints - Its hints, every key a property.
+ * @throws {ToolDefinitionError} When a positional is listed twice, or `plain` names a property that
+ *   takes no positional word.
+ */
+function assertPositionals(tool: ToolDefinition, hints: CliHints): void {
   const { positional } = hints;
   const repeated = positional.find((key, index) => positional.indexOf(key) !== index);
   if (repeated !== undefined) {
     throw new ToolDefinitionError(`${tool.name}: cli hint lists positional ${repeated} twice`);
   }
-  return hints;
+  const flag = hints.plain.find((key) => !positional.includes(key));
+  if (flag !== undefined) {
+    throw new ToolDefinitionError(`${tool.name}: plain property ${flag} must be positional`);
+  }
 }
 
 /**
@@ -225,7 +244,7 @@ function cliHints(tool: ToolDefinition): CliHints {
  */
 function toolFields(tool: ToolDefinition): Field[] {
   const properties = tool.input.properties as Readonly<Record<string, SchemaNode>>;
-  const { positional, rest, short, stdin } = cliHints(tool);
+  const { positional, plain, rest, short, stdin } = cliHints(tool);
   const keys = [
     ...positional,
     ...Object.keys(properties).filter((key) => !positional.includes(key)),
@@ -240,6 +259,7 @@ function toolFields(tool: ToolDefinition): Field[] {
       flag: flagName(key),
       kind: fieldKind(properties[key] ?? {}),
       positional: positional.includes(key),
+      plain: plain.includes(key),
       rest: rest.includes(key),
       restItems: rest.includes(key) ? textItems(properties[key] ?? {}) : undefined,
       short: Object.hasOwn(short, key) ? short[key] : undefined,
@@ -487,8 +507,12 @@ function parseWords(
     tokens: true,
   });
 
+  const ordered = inLineOrder(tokens, origins, texts);
+  const positionals = ordered.map(([, word]) => word);
   const values = emptyRecord<RawValue>();
-  const errors = refused.map((word) => unknownOption(options, word));
+  const errors = [...landedInPlain(fields, ordered, texts), ...refused].map((word) =>
+    unknownOption(options, word),
+  );
   const flags = new Set<string>();
   for (const token of tokens) {
     if (token.kind !== "option") continue;
@@ -497,7 +521,6 @@ function parseWords(
     else if ("flag" in read) flags.add(read.flag);
     else values[read.key] = read.value;
   }
-  const positionals = inLineOrder(tokens, origins, texts);
   return {
     values: Object.assign(values, positionalValues(fields, positionals)),
     json: flags.has("json"),
@@ -592,17 +615,39 @@ function wordKind(
  * @param tokens - Tokens of the line without the dashed text.
  * @param origins - Index on the original line of each word `util.parseArgs` read.
  * @param texts - The dashed text with its index on the original line.
- * @returns {string[]} Every positional word, in the order the line gave them.
+ * @returns {Array<readonly [number, string]>} Every positional word with its index on the
+ *   original line, in the order the line gave them.
  */
 function inLineOrder(
   tokens: ReadonlyArray<Readonly<{ kind: string; index: number; value?: string | undefined }>>,
   origins: readonly number[],
   texts: ReadonlyArray<readonly [number, string]>,
-): string[] {
+): Array<readonly [number, string]> {
   const read = tokens.flatMap((token) =>
     token.kind === "positional" ? [[origins[token.index] ?? 0, token.value ?? ""] as const] : [],
   );
-  return [...texts, ...read].toSorted(([a], [b]) => a - b).map(([, word]) => word);
+  return [...texts, ...read].toSorted(([a], [b]) => a - b);
+}
+
+/**
+ * An id or a key never starts with a dash, so `--withPubkey` in one is a mistyped option.
+ *
+ * @param fields - The command's fields.
+ * @param ordered - Positional words with their index on the original line, in line order.
+ * @param texts - The dashed text with its index on the original line.
+ * @returns {string[]} The dashed words that would fill a `plain` positional.
+ */
+function landedInPlain(
+  fields: readonly Field[],
+  ordered: ReadonlyArray<readonly [number, string]>,
+  texts: ReadonlyArray<readonly [number, string]>,
+): string[] {
+  const takes = fields.filter((field) => field.positional);
+  const dashed = new Set(texts.map(([index]) => index));
+  return ordered.flatMap(([index, word], slot) => {
+    const field = takes[Math.min(slot, takes.length - 1)];
+    return dashed.has(index) && field?.plain === true ? [word] : [];
+  });
 }
 
 /**
