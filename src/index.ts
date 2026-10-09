@@ -113,6 +113,10 @@ export interface ToolDefinition<Input extends TObject = TObject, Details = unkno
   readonly description: string;
   /** MCP `icons` in `tools/list`. Pi, OMP, the AI SDK and the CLI don't draw them. */
   readonly icons?: readonly Icon[];
+  /** MCP `_meta` in `tools/list`, such as `ui` or `openai/extensions`. No other surface reads it. */
+  readonly meta?: Readonly<Record<string, unknown>>;
+  /** Schema of `details`. MCP lists it as `outputSchema` and sends them as `structuredContent`. */
+  readonly output?: TObject;
   /** Pi `promptSnippet`. */
   readonly snippet?: string;
   /** Pi `promptGuidelines`. Must not promise anything `description` lacks. */
@@ -195,10 +199,25 @@ export function defineTool<const Input extends TObject, Details>(
     );
   }
   assertSchema(tool.name, wireSchema(tool));
+  if (tool.output !== undefined && !isObjectSchema(tool.output)) {
+    throw new ToolDefinitionError(
+      `${tool.name}: output must be a JSON Schema object of type "object"; build it with Type.Object from @agntn/tools`,
+    );
+  }
   return tool;
 }
 
 type SchemaNode = Readonly<Record<string, unknown>>;
+
+/**
+ * MCP wants an object at the root of `outputSchema`, and a function there is an omptype schema.
+ *
+ * @param schema - Output schema from a definition.
+ * @returns {boolean} Whether it is a plain JSON Schema object of type `object`.
+ */
+function isObjectSchema(schema: unknown): boolean {
+  return isNode(schema) && schema.type === "object";
+}
 
 /**
  * Enforces two rules on the input schema, at every depth.

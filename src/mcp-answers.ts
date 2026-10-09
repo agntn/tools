@@ -6,6 +6,7 @@
  */
 
 import type { CallToolResult, Tool, ToolAnnotations } from "@modelcontextprotocol/server";
+import { Value } from "typebox/value";
 
 import {
   indexTools,
@@ -16,6 +17,7 @@ import {
   type Icon,
   type ToolCallContext,
   type ToolDefinition,
+  type ToolResult,
 } from "./index.ts";
 
 export interface McpServerInfo {
@@ -66,7 +68,7 @@ export function errorResult(...lines: readonly string[]): CallToolResult {
  * The entries `tools/list` answers with, in the order given.
  *
  * @param tools - Tools to list.
- * @returns {Tool[]} Name, title, description, icons, schema and annotations of each tool.
+ * @returns {Tool[]} Name, title, description, icons, schemas, annotations and `_meta` of each tool.
  * @throws {ToolDefinitionError} When two tools share a name.
  */
 export function listTools(tools: readonly ToolDefinition[]): Tool[] {
@@ -77,7 +79,11 @@ export function listTools(tools: readonly ToolDefinition[]): Tool[] {
     description: tool.description,
     ...(tool.icons === undefined ? {} : { icons: copyIcons(tool.icons) }),
     inputSchema: wireSchema(tool) as Tool["inputSchema"],
+    ...(tool.output === undefined
+      ? {}
+      : { outputSchema: { ...tool.output } as NonNullable<Tool["outputSchema"]> }),
     annotations: toolAnnotations(tool),
+    ...(tool.meta === undefined ? {} : { _meta: { ...tool.meta } }),
   }));
 }
 
@@ -114,17 +120,37 @@ export async function callTool(
   if (!tool) return errorResult(`Unknown ${info.name} tool: ${JSON.stringify(name)}`);
 
   try {
-    const result = await invokeTool(tool, args, context);
-    return {
-      content: result.content,
-      ...(result.isError === undefined ? {} : { isError: result.isError }),
-    };
+    return answer(tool, await invokeTool(tool, args, context));
   } catch (error) {
     if (error instanceof ToolInputError) return errorResult(...error.lines);
     return errorResult(
       `${tool.name} failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+/**
+ * The result as MCP carries it, with `details` as `structuredContent` once they pass `output`.
+ *
+ * @param tool - Tool that answered.
+ * @param result - Its result.
+ * @returns {CallToolResult} Text, and the checked details when the tool declares their shape.
+ */
+function answer(tool: ToolDefinition, result: ToolResult): CallToolResult {
+  const content = {
+    content: result.content,
+    ...(result.isError === undefined ? {} : { isError: result.isError }),
+  };
+  if (tool.output === undefined || result.isError === true) return content;
+  if (Value.Check(tool.output, result.details)) {
+    return { ...content, structuredContent: result.details as Record<string, unknown> };
+  }
+  return errorResult(
+    `${tool.name} returned details that don't match its output schema`,
+    ...[...Value.Errors(tool.output, result.details)].map(
+      (failure) => `at ${failure.instancePath || "/"}: ${failure.message}`,
+    ),
+  );
 }
 
 /** One `notifications/progress` without its token. */

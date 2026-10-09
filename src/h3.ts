@@ -37,7 +37,9 @@ export function toH3Tools(
     description: entry.description,
     ...(entry.icons === undefined ? {} : { icons: entry.icons }),
     inputSchema: entry.inputSchema as JsonSchema,
+    ...(entry.outputSchema === undefined ? {} : { outputSchema: entry.outputSchema as JsonSchema }),
     annotations: entry.annotations,
+    ...(entry._meta === undefined ? {} : { _meta: entry._meta }),
     handler: (args, event) => {
       // Read now: a legacy batch shares one context between its calls.
       const mcp = event.context.mcp;

@@ -72,6 +72,29 @@ const echo = defineTool({
   },
 });
 
+const count = defineTool({
+  name: "demo_count",
+  title: "Demo Count",
+  description: "Count the letters of a word.",
+  meta: { ui: { visibility: ["model", "app"] }, "openai/extensions": { "mentions/search": {} } },
+  output: Type.Object(
+    { word: Type.String(), letters: Type.Integer() },
+    { additionalProperties: false },
+  ),
+  effect: "read",
+  input: Type.Object({ word: Type.String({ maxLength: 8 }) }, { additionalProperties: false }),
+  execute({ word }): ToolResult<Readonly<Record<string, unknown>>> {
+    if (word === "fail") {
+      return { content: [{ type: "text", text: "cannot count fail" }], details: {}, isError: true };
+    }
+    const letters = word === "drift" ? "five" : word.length;
+    return {
+      content: [{ type: "text", text: `${word} has ${word.length} letters` }],
+      details: { word, letters },
+    };
+  },
+});
+
 describe("defineTool", () => {
   it("rejects an open object schema", () => {
     expect(() =>
@@ -146,6 +169,24 @@ describe("defineTool", () => {
         execute: () => ({ content: [], details: null }),
       }),
     ).toThrow(/Type from @agntn\/tools/);
+  });
+
+  it("rejects an output schema MCP can't list", () => {
+    const shape = Type.Object({ a: Type.String() });
+    const outputs = [Type.String(), Object.assign(() => true, shape)];
+    for (const output of outputs) {
+      expect(() =>
+        defineTool({
+          name: "demo_output",
+          title: "Output",
+          description: "x",
+          effect: "read",
+          input: Type.Object({}),
+          output: output as typeof shape,
+          execute: () => ({ content: [], details: { a: "" } }),
+        }),
+      ).toThrow(/output must be a JSON Schema object of type "object"/);
+    }
   });
 
   it("rejects duplicate names", () => {
@@ -524,7 +565,7 @@ afterEach(async () => {
 
 async function mcpClient(): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const server = createMcpServer({ name: "demo", version: "0.0.0" }, [echo, slow]);
+  const server = createMcpServer({ name: "demo", version: "0.0.0" }, [echo, slow, count]);
   const client = new Client({ name: "test", version: "0.0.0" });
   open.push(client, server);
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -636,7 +677,7 @@ describe("MCP adapter", () => {
   it("lists through listTools what tools/list answers", async () => {
     const client = await mcpClient();
     expect((await client.listTools()).tools).toEqual(
-      JSON.parse(JSON.stringify(listTools([echo, slow]))),
+      JSON.parse(JSON.stringify(listTools([echo, slow, count]))),
     );
   });
 
@@ -707,6 +748,54 @@ describe("MCP adapter", () => {
     });
   });
 
+  it("lists the output schema and _meta of a tool that has them, and nothing for one without", async () => {
+    const client = await mcpClient();
+    const { tools } = await client.listTools();
+    const plain = tools.find((tool) => tool.name === "demo_echo");
+    const counted = tools.find((tool) => tool.name === "demo_count");
+
+    expect(plain).not.toHaveProperty("outputSchema");
+    expect(plain).not.toHaveProperty("_meta");
+    expect(counted?.outputSchema).toEqual(JSON.parse(JSON.stringify(count.output)));
+    expect(counted?._meta).toEqual(count.meta);
+  });
+
+  it("sends checked details as structuredContent, never on a failure", async () => {
+    const client = await mcpClient();
+    const call = async (word: string) =>
+      client.callTool({ name: "demo_count", arguments: { word } });
+
+    expect(await call("hey")).toEqual({
+      content: [{ type: "text", text: "hey has 3 letters" }],
+      structuredContent: { word: "hey", letters: 3 },
+    });
+    expect(await call("fail")).toEqual({
+      content: [{ type: "text", text: "cannot count fail" }],
+      isError: true,
+    });
+    expect(await call("drift")).toEqual({
+      content: [
+        {
+          type: "text",
+          text: "demo_count returned details that don't match its output schema\nat /letters: must be integer",
+        },
+      ],
+      isError: true,
+    });
+    expect(
+      await client.callTool({ name: "demo_echo", arguments: { word: "hi" } }),
+    ).not.toHaveProperty("structuredContent");
+  });
+
+  it("answers a tool with output through callTool as tools/call does", async () => {
+    const client = await mcpClient();
+    for (const word of ["hey", "fail", "drift"]) {
+      expect(await callTool({ name: "demo" }, [count], "demo_count", { word })).toEqual(
+        await client.callTool({ name: "demo_count", arguments: { word } }),
+      );
+    }
+  });
+
   it("treats prototype names as unknown tools", async () => {
     const client = await mcpClient();
     expect(await client.callTool({ name: "toString", arguments: {} })).toEqual({
@@ -740,7 +829,7 @@ async function h3Client(): Promise<Client> {
     defineMcpHandler({
       name: "demo",
       version: "0.0.0",
-      tools: toH3Tools({ name: "demo" }, [echo, slow, signal]),
+      tools: toH3Tools({ name: "demo" }, [echo, slow, signal, count]),
     }),
   );
   const transport = new StreamableHTTPClientTransport(new URL("http://localhost/mcp"), {
@@ -756,7 +845,7 @@ describe("h3-mcp adapter", () => {
   it("lists over h3-mcp what tools/list answers", async () => {
     const client = await h3Client();
     expect((await client.listTools()).tools).toEqual(
-      JSON.parse(JSON.stringify(listTools([echo, slow, signal]))),
+      JSON.parse(JSON.stringify(listTools([echo, slow, signal, count]))),
     );
   });
 
@@ -804,6 +893,14 @@ describe("h3-mcp adapter", () => {
     expect(await client.callTool({ name: "demo_slow", arguments: {} })).toEqual({
       content: [{ type: "text", text: "progress off" }],
     });
+  });
+
+  it("answers a tool with output as the MCP server does", async () => {
+    const [h3, sdk] = await Promise.all([h3Client(), mcpClient()]);
+    for (const word of ["hey", "fail", "drift"]) {
+      const call = { name: "demo_count", arguments: { word } };
+      expect(await h3.callTool(call)).toEqual(await sdk.callTool(call));
+    }
   });
 
   it("hands the request's abort signal to the executor", async () => {
