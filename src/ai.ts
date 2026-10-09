@@ -5,7 +5,7 @@
  * a package needs no second schema in Zod.
  */
 
-import { jsonSchema, tool, type Tool } from "ai";
+import { jsonSchema, tool, type JSONValue, type Tool } from "ai";
 import type { Static, TObject } from "typebox";
 
 import {
@@ -20,7 +20,7 @@ import {
 
 /**
  * What an AI SDK tool returns: the executor's details with the text MCP
- * clients read. The AI SDK hands this object to the model as JSON.
+ * clients read. Your code gets the whole object, the model reads only `text`.
  */
 export type AiToolOutput<Details> = (Details extends object ? Details : { details: Details }) & {
   text: string;
@@ -30,7 +30,8 @@ export type AiToolOutput<Details> = (Details extends object ? Details : { detail
  * Converts one tool, keeping its input and details types.
  *
  * A result with `isError` throws its text, which the AI SDK reports to the
- * model as a tool error, the same as an executor that throws.
+ * model as a tool error, the same as an executor that throws. The model reads
+ * `text` alone, as on every other host, not the details spelled out a second time.
  *
  * @param definition - Tool to convert.
  * @returns {Tool} AI SDK tool.
@@ -69,8 +70,26 @@ export function toAiTool<Input extends TObject, Details>(
       }
       return { ...details, text };
     },
+    toModelOutput: ({ output }) => modelOutput(output),
   });
   return built as unknown as Tool<Static<Input>, AiToolOutput<Details>>;
+}
+
+/** What `toModelOutput` hands the model. */
+type ModelOutput = { type: "text"; value: string } | { type: "json"; value: JSONValue };
+
+/**
+ * What the model reads: the text, or the whole output as JSON when there is none, as for an image.
+ *
+ * @param output - What `execute` returned, or what a client sent back as its output.
+ * @returns {ModelOutput} The text, or the output as it is.
+ */
+function modelOutput(output: unknown): ModelOutput {
+  const text =
+    typeof output === "object" && output !== null ? (output as { text?: unknown }).text : undefined;
+  return typeof text === "string" && text !== ""
+    ? { type: "text", value: text }
+    : { type: "json", value: output as JSONValue };
 }
 
 /**

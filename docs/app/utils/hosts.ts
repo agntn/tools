@@ -177,7 +177,7 @@ async function callOmp(tool: ToolDefinition, args: unknown): Promise<HostAnswer>
   }
 }
 
-/** Calls the tool the way the AI SDK does: the input schema first, then `execute`. */
+/** Calls the tool the way the AI SDK does, then shows what `toModelOutput` lets the model read. */
 async function callAi(tool: ToolDefinition, args: unknown): Promise<HostAnswer> {
   const [{ toAiTool }, { asSchema }] = await Promise.all([import("@agntn/tools/ai"), import("ai")]);
   const aiTool = toAiTool(tool);
@@ -187,7 +187,8 @@ async function callAi(tool: ToolDefinition, args: unknown): Promise<HostAnswer> 
   }
   try {
     const output = await aiTool.execute!(args as never, { toolCallId: "call-1", messages: [], context: {} } as never);
-    return { failed: false, channel: "result", text: JSON.stringify(output) };
+    const read = await aiTool.toModelOutput!({ toolCallId: "call-1", input: args as never, output: output as never });
+    return { failed: false, channel: "result", text: read.type === "text" ? read.value : JSON.stringify(output) };
   } catch (error) {
     return { failed: true, channel: "thrown", text: thrown(error) };
   }
