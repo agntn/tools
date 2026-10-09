@@ -6,7 +6,7 @@ import { Server } from "@modelcontextprotocol/server";
 
 import { indexTools, type ToolDefinition } from "./index.ts";
 import {
-  callTool,
+  callAsking,
   canAsk,
   copyIcons,
   listTools,
@@ -79,12 +79,12 @@ export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinit
     const round = canAsk(capabilities)
       ? questionRound(ctx.mcpReq.inputResponses, stateOf(ctx.mcpReq.requestState()))
       : undefined;
-    const result = await callTool(info, tools, request.params.name, request.params.arguments, {
+    const context = {
       signal: ctx.mcpReq.signal,
       ...(progressToken === undefined ? {} : { progress: progressSteps(notify) }),
-      ...(round ? { ask: round.ask } : {}),
-    });
-    return round?.pending() ?? result;
+    };
+    const { name, arguments: args } = request.params;
+    return await callAsking(info, tools, name, args, context, round);
   });
 
   return server;

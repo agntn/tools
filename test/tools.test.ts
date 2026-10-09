@@ -42,7 +42,7 @@ import {
 } from "../src/index.ts";
 import { toH3Tools } from "../src/h3.ts";
 import { callTool, createMcpServer, listTools } from "../src/mcp.ts";
-import { questionRound } from "../src/mcp-answers.ts";
+import { callAsking, questionRound } from "../src/mcp-answers.ts";
 import { hostAsk, requestedSchema, type HostQuestion } from "../src/questions.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
@@ -1640,9 +1640,10 @@ describe("questions", () => {
       { "ask-1": replies[1] },
       JSON.stringify([{ action: "accept", content: { color: "blue" } }]),
     );
-    await callTool({ name: "demo" }, [asker], "demo_ask", {}, { ask: round.ask });
+    const result = await callAsking({ name: "demo" }, [asker], "demo_ask", {}, {}, round);
 
-    expect(round.pending()).toEqual({
+    expect(result).toBe(round.pending());
+    expect(result).toEqual({
       resultType: "input_required",
       inputRequests: { "ask-0": { method: "elicitation/create", params: colorWire } },
       requestState: "[]",
@@ -1824,5 +1825,46 @@ describe("questions in Pi and OMP", () => {
 
     expect(resultText(result as ToolResult)).toBe("red x3 tags=a loud=true note=-");
     expect(drawn).toHaveLength(8);
+  });
+});
+
+let writes = 0;
+/* Swallows every error around its question, then writes: the shape that must not run early. */
+const careless = defineTool({
+  name: "demo_careless",
+  title: "Demo Careless",
+  description: "Ask, shrug off any failure, then write.",
+  effect: "write",
+  input: Type.Object({}),
+  async execute(_input, { ask, signal }): Promise<ToolResult<null>> {
+    let color = "none";
+    try {
+      const answer = await ask?.({
+        message: "Pick",
+        schema: Type.Object({ color: Type.String() }),
+      });
+      if (answer?.action === "accept") color = answer.content.color;
+    } catch {}
+    writes++;
+    return {
+      content: [{ type: "text", text: `${color} ${String(signal?.aborted)}` }],
+      details: null,
+    };
+  },
+});
+
+describe("a question nobody has answered yet", () => {
+  it("holds the call where it asked, so a caught error can't run the write early", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer({ name: "demo", version: "0.0.0" }, [careless]);
+    const { client } = formClient([{ action: "accept", content: { color: "red" } }]);
+    open.push(server);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    writes = 0;
+
+    expect(firstText(await client.callTool({ name: "demo_careless", arguments: {} }))).toBe(
+      "red false",
+    );
+    expect(writes).toBe(1);
   });
 });

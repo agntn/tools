@@ -165,6 +165,8 @@ function answer(tool: ToolDefinition, result: ToolResult): CallToolResult {
 export interface QuestionRound {
   readonly ask: ToolAsk;
   readonly pending: () => InputRequiredResult | undefined;
+  /** Settles the moment the call stops on a question it has no answer for. */
+  readonly stopped: () => Promise<void>;
 }
 
 /**
@@ -177,15 +179,18 @@ export interface QuestionRound {
  * doesn't fit its question, from a client or a tampered state, is asked again.
  * The state needs no signature: whoever could forge it could forge the reply.
  *
+ * A question without its answer never settles, so no `catch` around it lets the call run on.
+ *
  * @param responses - The retry's `inputResponses`, absent on the first pass.
  * @param state - The retry's `requestState`, absent on the first pass.
- * @returns {QuestionRound} The `ask` and the question to send, once the call has run.
+ * @returns {QuestionRound} The `ask`, the question to send and the moment the call stopped.
  */
 export function questionRound(
   responses: Readonly<Record<string, unknown>> | undefined,
   state: string | undefined,
 ): QuestionRound {
   const answers = readState(state);
+  const { promise: stopped, resolve: stop } = Promise.withResolvers<void>();
   let asked = 0;
   let pending: InputRequiredResult | undefined;
   const ask = hostAsk(async (question) => {
@@ -198,10 +203,66 @@ export function questionRound(
         return answer;
       }
       pending = inputRequired(index, question, answers.slice(0, index));
+      stop();
     }
-    throw new Error("Waiting for the user to answer");
+    return await new Promise<never>(() => {});
   });
-  return { ask, pending: () => pending };
+  return { ask, pending: () => pending, stopped: async () => await stopped };
+}
+
+/**
+ * Answers one call as `callTool` does, or with `input_required` once it stops on a question.
+ *
+ * The stopped call is left hanging where it asked, and its signal aborts, so
+ * work it started next to the question winds down instead of running on.
+ * Progress goes quiet at the same moment.
+ *
+ * @param info - Server info; `name` is the word in the message for an unknown tool.
+ * @param tools - Tools to look the name up in.
+ * @param name - Tool name as the client sent it.
+ * @param args - Arguments as the client sent them.
+ * @param context - Context for this call, without `ask`.
+ * @param round - The round of questions, when the client can answer one.
+ * @returns {Promise<CallToolResult | InputRequiredResult>} The answer, or the question to send.
+ */
+export async function callAsking(
+  info: Pick<McpServerInfo, "name">,
+  tools: readonly ToolDefinition[],
+  name: string,
+  args: unknown,
+  context: ToolCallContext,
+  round: QuestionRound | undefined,
+): Promise<CallToolResult | InputRequiredResult> {
+  if (!round) return await callTool(info, tools, name, args, context);
+  const halt = new AbortController();
+  const { progress, signal } = context;
+  const call = callTool(info, tools, name, args, {
+    ...context,
+    signal: signal ? AbortSignal.any([signal, halt.signal]) : halt.signal,
+    ...(progress ? { progress: quietOnQuestion(progress, round) } : {}),
+    ask: round.ask,
+  });
+  const result = await Promise.race([call, round.stopped()]);
+  const pending = round.pending();
+  if (pending === undefined && result !== undefined) return result;
+  halt.abort(new Error("The call stopped to wait for the user"));
+  return pending ?? (await call);
+}
+
+/**
+ * Progress that stops once the call has stopped on a question, since that request has its answer.
+ *
+ * @param progress - The transport's callback.
+ * @param round - The round that may stop the call.
+ * @returns {NonNullable<ToolCallContext["progress"]>} The callback for `execute`.
+ */
+function quietOnQuestion(
+  progress: NonNullable<ToolCallContext["progress"]>,
+  round: QuestionRound,
+): NonNullable<ToolCallContext["progress"]> {
+  return (message, amount) => {
+    if (round.pending() === undefined) progress(message, amount);
+  };
 }
 
 /**

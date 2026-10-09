@@ -6,7 +6,7 @@ import type { JsonSchema, ToolDefinition as H3ToolDefinition } from "h3-mcp";
 
 import { type ToolCallContext, type ToolDefinition } from "./index.ts";
 import {
-  callTool,
+  callAsking,
   canAsk,
   listTools,
   progressSteps,
@@ -57,10 +57,8 @@ export function toH3Tools(
       const context: ToolCallContext = {
         signal: mcp?.signal,
         ...(progress === undefined ? {} : { progress: numbered(progress) }),
-        ...(round ? { ask: round.ask } : {}),
       };
-      const result = await callTool(info, tools, entry.name, args, context);
-      return round?.pending() ?? result;
+      return await callAsking(info, tools, entry.name, args, context, round);
     },
   }));
 }
