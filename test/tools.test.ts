@@ -24,6 +24,7 @@ import {
   sanitizeLine,
   sanitizeText,
   ToolDefinitionError,
+  ToolInputError,
   Type,
   validateInput,
   invokeTool,
@@ -160,6 +161,34 @@ describe("validateInput", () => {
       'Invalid arguments: unknown property "wrod"; takes word, mode',
       "Invalid arguments at /: must have required properties word",
       "Invalid arguments at /mode: must be one of plain, loud",
+    ]);
+  });
+
+  it("keeps the place of each failure apart from its text", async () => {
+    const checked = validateInput(echo, { wrod: "x", mode: "quiet" });
+
+    expect(checked.ok ? [] : checked.issues).toEqual([
+      {
+        line: 'Invalid arguments: unknown property "wrod"; takes word, mode',
+        at: "",
+        problem: 'unknown property "wrod"; takes word, mode',
+      },
+      {
+        line: "Invalid arguments at /: must have required properties word",
+        at: "",
+        problem: "must have required properties word",
+        missing: ["word"],
+      },
+      {
+        line: "Invalid arguments at /mode: must be one of plain, loud",
+        at: "/mode",
+        problem: "must be one of plain, loud",
+      },
+    ]);
+    const thrown = await invokeTool(echo, { mode: "quiet" }).catch((error: unknown) => error);
+    expect(thrown instanceof ToolInputError ? thrown.issues.map((issue) => issue.at) : []).toEqual([
+      "",
+      "/mode",
     ]);
   });
 
