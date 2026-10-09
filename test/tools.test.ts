@@ -11,7 +11,8 @@ import type {
   ToolDefinition as PiToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ToolDefinition as OmpToolDefinition } from "@oh-my-pi/pi-coding-agent";
-import { asSchema } from "ai";
+import { asSchema, generateText, isStepCount } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { H3 } from "h3";
 import { defineMcpHandler } from "h3-mcp";
 import { Client as SdkV1Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -1083,6 +1084,59 @@ describe("AI SDK adapter", () => {
     expect(await tool.execute({ word: "hi" }, options)).toEqual({ word: "hi", text: "hi" });
     await expect(tool.execute({ word: "fail" }, options)).rejects.toThrow("cannot echo fail");
     expect(Object.keys(toAiTools([echo]))).toEqual(["demo_echo"]);
+  });
+
+  it("hands the model the text alone, not the details a second time", async () => {
+    const usage = {
+      inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 1, text: 1, reasoning: undefined },
+    };
+    const model = new MockLanguageModelV4({
+      doGenerate: [
+        {
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "1",
+              toolName: "demo_echo",
+              input: JSON.stringify({ word: "hi", mode: "loud" }),
+            },
+          ],
+          finishReason: { unified: "tool-calls", raw: undefined },
+          usage,
+          warnings: [],
+        },
+        {
+          content: [{ type: "text", text: "done" }],
+          finishReason: { unified: "stop", raw: undefined },
+          usage,
+          warnings: [],
+        },
+      ],
+    });
+
+    const run = await generateText({
+      model,
+      prompt: "shout hi",
+      tools: toAiTools([echo]),
+      stopWhen: isStepCount(2),
+    });
+
+    expect(run.steps[0]?.toolResults[0]?.output).toEqual({ word: "hi", text: "HI" });
+    expect(model.doGenerateCalls[1]?.prompt.at(-1)).toMatchObject({
+      role: "tool",
+      content: [{ type: "tool-result", output: { type: "text", value: "HI" } }],
+    });
+  });
+
+  it("shows the model an output without text as JSON, as a stored chat may bring one", async () => {
+    const tool = toAiTool(echo);
+    const output = await tool.toModelOutput?.({
+      toolCallId: "1",
+      input: { word: "hi" },
+      output: { word: "hi" } as never,
+    });
+    expect(output).toEqual({ type: "json", value: { word: "hi" } });
   });
 
   it("gives the tool no progress callback, since the AI SDK has nowhere to show it", async () => {
