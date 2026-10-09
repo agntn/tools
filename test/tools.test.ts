@@ -1129,14 +1129,28 @@ describe("AI SDK adapter", () => {
     });
   });
 
-  it("shows the model an output without text as JSON, as a stored chat may bring one", async () => {
-    const tool = toAiTool(echo);
-    const output = await tool.toModelOutput?.({
-      toolCallId: "1",
-      input: { word: "hi" },
-      output: { word: "hi" } as never,
+  it("shows the model the whole output when the tool answers with an image alone", async () => {
+    const picture = defineTool({
+      name: "demo_picture",
+      title: "Picture",
+      description: "x",
+      effect: "read",
+      input: Type.Object({}),
+      execute: () => ({
+        content: [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }],
+        details: { width: 1 },
+      }),
     });
-    expect(output).toEqual({ type: "json", value: { word: "hi" } });
+    const tool = toAiTool(picture);
+    const options = { toolCallId: "1", messages: [], context: {} };
+    const output = await tool.execute?.({}, options);
+
+    expect(
+      await tool.toModelOutput?.({ toolCallId: "1", input: {}, output: output as never }),
+    ).toEqual({
+      type: "json",
+      value: { width: 1, text: "" },
+    });
   });
 
   it("gives the tool no progress callback, since the AI SDK has nowhere to show it", async () => {

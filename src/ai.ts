@@ -79,7 +79,7 @@ export function toAiTool<Input extends TObject, Details>(
 type ModelOutput = { type: "text"; value: string } | { type: "json"; value: JSONValue };
 
 /**
- * What the model reads: the text, or the whole output as JSON when a stored chat has none.
+ * What the model reads: the text, or the whole output as JSON when there is none, as for an image.
  *
  * @param output - What `execute` returned, or what a client sent back as its output.
  * @returns {ModelOutput} The text, or the output as it is.
@@ -87,7 +87,7 @@ type ModelOutput = { type: "text"; value: string } | { type: "json"; value: JSON
 function modelOutput(output: unknown): ModelOutput {
   const text =
     typeof output === "object" && output !== null ? (output as { text?: unknown }).text : undefined;
-  return typeof text === "string"
+  return typeof text === "string" && text !== ""
     ? { type: "text", value: text }
     : { type: "json", value: output as JSONValue };
 }
