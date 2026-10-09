@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.2.3
+
+[compare changes](https://github.com/agntn/tools/compare/v0.2.2...v0.2.3)
+
+### 🚀 Enhancements
+
+- Add `plain` CLI positionals ([#79](https://github.com/agntn/tools/pull/79))
+- **docs:** Describe the remote MCP server ([#80](https://github.com/agntn/tools/pull/80))
+- Add tool `meta` and `output` for MCP ([#82](https://github.com/agntn/tools/pull/82))
+- Add an `@nuxtjs/mcp-toolkit` adapter ([#83](https://github.com/agntn/tools/pull/83))
+- Add `ask` to the call context ([#86](https://github.com/agntn/tools/pull/86))
+- Let `toToolkitTools` ask the user ([#87](https://github.com/agntn/tools/pull/87))
+
+### 🩹 Fixes
+
+- Name the CLI word in schema errors ([#78](https://github.com/agntn/tools/pull/78))
+- Stop shipping broken source maps ([#88](https://github.com/agntn/tools/pull/88))
+- Show the AI SDK model only the text ([#89](https://github.com/agntn/tools/pull/89))
+
+### ❤️ Contributors
+
+- Ori ([@oritwoen](https://github.com/oritwoen))
+- Aeitwoen ([@aeitwoen](https://github.com/aeitwoen))
+
 ## v0.2.2
 
 [compare changes](https://github.com/agntn/tools/compare/v0.2.1...v0.2.2)

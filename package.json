@@ -1,6 +1,6 @@
 {
   "name": "@agntn/tools",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "One tool definition for MCP, Pi, OMP and the AI SDK",
   "homepage": "https://github.com/agntn/tools#readme",
   "bugs": "https://github.com/agntn/tools/issues",
