@@ -67,6 +67,8 @@ export interface ToolCliHints {
   readonly positional?: readonly string[];
   /** Words left after `positional`: joined by spaces into a string, one per item into an array. */
   readonly rest?: string;
+  /** Positionals no dashed word may fill, such as ids. One there fails as an unknown option. */
+  readonly plain?: readonly string[];
   /** Short flags by property, `{ limit: "n" }` for `-n 5`. Only a whole word counts. */
   readonly short?: Readonly<Record<string, string>>;
   /** String properties that read stdin when given as `-`. */

@@ -907,6 +907,66 @@ describe("CLI dashed text", () => {
     expect(execute).not.toHaveBeenCalled();
     expect((await run(["decode", "morse", "-h"], cli)).stdout).toContain("USAGE demo decode");
   });
+
+  it("keeps dashed words out of a plain positional", async () => {
+    const plain = { ...decode, cli: { ...decode.cli, plain: ["cipher"] } };
+    const strict: CliOptions = { ...cli, tools: [plain] };
+    const execute = vi.spyOn(plain, "execute");
+    expect(await run(["decode", "--withPubkey"], strict)).toEqual({
+      stdout: "",
+      stderr: `Invalid arguments: unknown option "--withPubkey"; ${takes}\n`,
+      exitCode: 1,
+    });
+    expect((await run(["decode", "-.-.", "morse"], strict)).stderr).toBe(
+      `Invalid arguments: unknown option "-.-."; ${takes}\n`,
+    );
+    expect((await run(["decode", "-.-.", "--kye", "x"], strict)).stderr).toBe(
+      [
+        `Invalid arguments: unknown option "-.-."; ${takes}`,
+        `Invalid arguments: unknown option "--kye"; ${takes}`,
+        "",
+      ].join("\n"),
+    );
+    expect(execute).not.toHaveBeenCalled();
+    expect((await run(["decode", "morse", "-.-. .- -"], strict)).stdout).toBe(
+      `{"cipher":"morse","text":"-.-. .- -"}\n`,
+    );
+    expect((await run(["decode", "-k", "x", "--", "-5"], strict)).stdout).toBe(
+      `{"cipher":"-5","key":"x"}\n`,
+    );
+  });
+
+  it("refuses dashed words in a plain rest and leaves the plain ones alone", async () => {
+    const search = defineTool({
+      name: "demo_search",
+      title: "Search",
+      description: "Search for words.",
+      effect: "read",
+      input: Type.Object(
+        { digest: Type.String(), words: Type.Array(Type.String()) },
+        { additionalProperties: false },
+      ),
+      cli: { positional: ["digest"], rest: "words", plain: ["words"] },
+      execute: (input) => ({
+        content: [{ type: "text", text: JSON.stringify(input) }],
+        details: null,
+      }),
+    });
+    const words: CliOptions = { ...cli, tools: [search] };
+    expect((await run(["search", "-ab12", "venus"], words)).stdout).toBe(
+      `{"digest":"-ab12","words":["venus"]}\n`,
+    );
+    expect((await run(["search", "ab12", "-venus"], words)).stderr).toBe(
+      'Invalid arguments: unknown option "-venus"; takes --json\n',
+    );
+  });
+
+  it("rejects a plain hint on a property that takes no positional word", () => {
+    const build = (hints: object) => () =>
+      createCli({ ...cli, tools: [{ ...decode, cli: { ...decode.cli, ...hints } }] });
+    expect(build({ plain: ["key"] })).toThrow("demo_decode: plain property key must be positional");
+    expect(build({ plain: ["nope"] })).toThrow("demo_decode: cli hint names unknown property nope");
+  });
 });
 
 describe("CLI definitions", () => {
