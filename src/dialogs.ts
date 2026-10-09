@@ -178,12 +178,12 @@ async function pick(
   labels: readonly string[],
 ): Promise<Reply> {
   const lines = labels.map(sanitizeLine);
-  const options = prompt.optional ? [...lines, SKIP_LABEL] : lines;
+  const options = distinct(prompt.optional ? [...lines, SKIP_LABEL] : lines);
   const chosen = await prompt.ui.select(prompt.title, options, signalOption(prompt));
   if (chosen === undefined) return CLOSED;
   const index = options.indexOf(chosen);
   if (index >= 0 && index < values.length) return values[index];
-  return chosen === SKIP_LABEL && prompt.optional ? SKIP : chosen;
+  return prompt.optional && index === values.length ? SKIP : chosen;
 }
 
 /**
@@ -197,8 +197,8 @@ async function toggle(prompt: Prompt): Promise<Reply> {
   const values = (items.enum as readonly string[]).map(String);
   const picked = new Set(Array.isArray(prompt.field.default) ? prompt.field.default : []);
   for (;;) {
-    const lines = values.map(
-      (value) => `${picked.has(value) ? "[x]" : "[ ]"} ${sanitizeLine(value)}`,
+    const lines = distinct(
+      values.map((value) => `${picked.has(value) ? "[x]" : "[ ]"} ${sanitizeLine(value)}`),
     );
     const chosen = await prompt.ui.select(
       prompt.title,
@@ -236,6 +236,22 @@ async function typeIn(prompt: Prompt): Promise<Reply> {
 function hintOf(field: Field): string | undefined {
   const hint = typeof field.description === "string" ? field.description : field.default;
   return hint === undefined ? undefined : sanitizeLine(hint);
+}
+
+/**
+ * Lines a list can tell apart: a repeat, such as two values cleaned alike, gets `(2)`.
+ *
+ * @param lines - Lines in order.
+ * @returns {string[]} The same lines, each one different from the rest.
+ */
+function distinct(lines: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return lines.map((line) => {
+    let label = line;
+    for (let count = 2; seen.has(label); count++) label = `${line} (${count})`;
+    seen.add(label);
+    return label;
+  });
 }
 
 const DECIMAL = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;

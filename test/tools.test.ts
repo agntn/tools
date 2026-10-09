@@ -1795,6 +1795,29 @@ describe("questions in Pi and OMP", () => {
     ]);
   });
 
+  it("tells apart two values that clean to the same line", async () => {
+    const twins = defineTool({
+      ...asker,
+      name: "demo_twins",
+      async execute(_input, { ask }): Promise<ToolResult<null>> {
+        const answer = await ask?.({
+          message: "Which?",
+          schema: Type.Object({ pick: Type.Enum(["a\nb", "a b"]) }),
+        });
+        const text = answer?.action === "accept" ? JSON.stringify(answer.content.pick) : "none";
+        return { content: [{ type: "text", text }], details: null };
+      },
+    });
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [twins]);
+    const { drawn, ctx } = scriptedCtx(["a b (2)"]);
+    const result = await registered[0]?.execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(drawn).toEqual(["select Which? [a b | a b (2)]"]);
+    expect(resultText(result as ToolResult)).toBe('"a b"');
+  });
+
   it("closes the whole form on Escape", async () => {
     const { drawn, ctx } = scriptedCtx(["red", undefined]);
     const result = await piAsker().execute("call-1", {}, undefined, undefined, ctx as never);
