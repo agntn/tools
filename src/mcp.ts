@@ -32,7 +32,7 @@ export {
  * raw tool name with newlines and escapes into its error, joins validation
  * failures into one line and passes a thrown message through unsanitized.
  *
- * `details` never reaches the client and `structuredContent` is never set:
+ * `details` reach the client only from a tool with `output`, as `structuredContent`:
  * clients that see structured output prefer it over `content` and would hide
  * the readable answer. Every fact a follow-up call needs belongs in the text.
  *
