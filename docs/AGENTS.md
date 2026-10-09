@@ -19,6 +19,7 @@ docs/
 ├── app/utils/demo-tool.ts         # text_slug, the one tool every panel registers and calls
 ├── app/utils/hosts.ts             # the four hosts, their metadata, registrations and calls through the real adapters
 ├── app/pages/playground.vue       # playground, own route outside the docs layout, its own useSeo and OG image
+├── server/mcp/index.ts            # the Docus MCP handler at /mcp, with a description and the site's icons
 ├── server/routes/sitemap.xml.ts   # Docus sitemap plus the Vue pages it cannot see
 ├── public/                        # fonts, favicon.svg and the icons and manifest cut from it
 ├── content/index.md               # landing
@@ -58,6 +59,7 @@ Two resolution traps, both because the repo root is its own pnpm workspace:
 - `seo.schema` in `app/app.config.ts` emits the landing JSON-LD: `WebSite`, the agntn `Organization` as publisher, and a free `SoftwareApplication` with `sameAs` on GitHub and npm.
 - `server/routes/sitemap.xml.ts` wraps the Docus sitemap and appends the Vue pages listed in `PAGES`; a new page under `app/pages/` goes there too.
 - `public/favicon.svg` is the source, the PNGs and the `.ico` are cut from it with ImageMagick.
+- `/mcp` names `favicon.svg` and `icon-512.png` by their absolute URLs on tools.agntn.dev as its icons, so a connector card breaks quietly when either moves.
 
 ## OG images
 
