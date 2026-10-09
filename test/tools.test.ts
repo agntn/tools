@@ -1543,6 +1543,31 @@ async function askingH3Client(
   return asking;
 }
 
+/* One pass of `demo_ask` over MCP with what a client would send back. */
+async function roundTrip(
+  responses: Readonly<Record<string, unknown>> | undefined,
+  state: string | undefined,
+) {
+  return await callAsking(
+    { name: "demo" },
+    [asker],
+    "demo_ask",
+    {},
+    {},
+    questionRound(responses, state),
+  );
+}
+
+/* The `requestState` of an `input_required` answer. */
+function stateOf(result: unknown): string {
+  return String((result as { requestState?: unknown }).requestState);
+}
+
+/* The `inputRequests` of an `input_required` answer. */
+function inputRequestsOf(result: unknown): Record<string, unknown> {
+  return (result as { inputRequests?: Record<string, unknown> }).inputRequests ?? {};
+}
+
 /* The text of a tool call's first block. */
 function firstText(result: unknown): string {
   const [block] = (result as { content: Array<{ text?: string }> }).content;
@@ -1666,27 +1691,57 @@ describe("questions", () => {
     expect(resultText(await invokeTool(asker, {}))).toBe("nobody to ask");
   });
 
-  it("asks again past a replayed answer that doesn't fit, as from a tampered state", async () => {
-    const round = questionRound(
-      { "ask-1": replies[1] },
-      JSON.stringify([{ action: "accept", content: { color: "blue" } }]),
-    );
-    const result = await callAsking({ name: "demo" }, [asker], "demo_ask", {}, {}, round);
+  it("replays every answer so far and stops at the first question still out", async () => {
+    const first = await roundTrip(undefined, undefined);
+    const second = await roundTrip({ "ask-0": replies[0] }, stateOf(first));
+    const last = await roundTrip({ "ask-1": replies[1] }, stateOf(second));
 
-    expect(result).toBe(round.pending());
-    expect(result).toEqual({
-      resultType: "input_required",
-      inputRequests: { "ask-0": { method: "elicitation/create", params: colorWire } },
-      requestState: "[]",
+    expect(Object.keys(inputRequestsOf(first))).toEqual(["ask-0"]);
+    expect(Object.keys(inputRequestsOf(second))).toEqual(["ask-1"]);
+    expect(firstText(last)).toBe("red x3 tags=b loud=true note=-");
+  });
+
+  it("asks again past a replayed answer that doesn't fit, as from a tampered state", async () => {
+    const first = await roundTrip(undefined, undefined);
+    const second = await roundTrip({ "ask-0": replies[0] }, stateOf(first));
+    const state = JSON.parse(stateOf(second)) as { answers: Array<{ a: unknown }> };
+    const [entry] = state.answers;
+    if (entry) entry.a = { action: "accept", content: { color: "blue" } };
+    const tampered = await roundTrip({ "ask-1": replies[1] }, JSON.stringify(state));
+
+    expect(inputRequestsOf(tampered)).toEqual({
+      "ask-0": { method: "elicitation/create", params: colorWire },
     });
   });
 
-  it("hands nothing to send once every question has its answer", async () => {
-    const round = questionRound({ "ask-1": replies[1] }, JSON.stringify([replies[0]]));
-    const result = await callTool({ name: "demo" }, [asker], "demo_ask", {}, { ask: round.ask });
+  it("asks again when the question changed since the answer came", async () => {
+    let target = "A";
+    const apply = defineTool({
+      name: "demo_apply",
+      title: "Demo Apply",
+      description: "Ask before applying to the current target.",
+      effect: "write",
+      input: Type.Object({}),
+      async execute(_input, { ask }): Promise<ToolResult<null>> {
+        const answer = await ask?.({ message: `Apply to ${target}?`, schema: Type.Object({}) });
+        return { content: [{ type: "text", text: `applied ${answer?.action}` }], details: null };
+      },
+    });
+    const call = async (responses?: Readonly<Record<string, unknown>>, state?: string) =>
+      await callAsking(
+        { name: "demo" },
+        [apply],
+        "demo_apply",
+        {},
+        {},
+        questionRound(responses, state),
+      );
 
-    expect(firstText(result)).toBe("red x3 tags=b loud=true note=-");
-    expect(round.pending()).toBeUndefined();
+    const asked = await call();
+    target = "B";
+    const again = await call({ "ask-0": { action: "accept", content: {} } }, stateOf(asked));
+
+    expect(JSON.stringify(inputRequestsOf(again))).toContain("Apply to B?");
   });
 
   it("asks a stdio client with elicitation, the call starting over for each answer", async () => {

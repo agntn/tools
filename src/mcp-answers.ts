@@ -176,7 +176,8 @@ export interface QuestionRound {
  * client calls again with the answer. So every answer so far rides in
  * `requestState`, the next one in `inputResponses` under `ask-<n>`, and
  * `execute` runs from the top with each one replayed in order. A reply that
- * doesn't fit its question, from a client or a tampered state, is asked again.
+ * doesn't fit its question, from a client or a tampered state, is asked again,
+ * and so is one whose question has changed since: each answer keeps its question's fingerprint.
  * The state needs no signature: whoever could forge it could forge the reply.
  *
  * A question without its answer never settles, so no `catch` around it lets the call run on.
@@ -189,25 +190,67 @@ export function questionRound(
   responses: Readonly<Record<string, unknown>> | undefined,
   state: string | undefined,
 ): QuestionRound {
-  const answers = readState(state);
+  const read = readState(state);
+  const answers = [...read.answers];
+  const { asking } = read;
   const { promise: stopped, resolve: stop } = Promise.withResolvers<void>();
   let asked = 0;
+  let turn: Promise<unknown> = Promise.resolve();
   let pending: InputRequiredResult | undefined;
+  const settle = async (index: number, question: HostQuestion): Promise<unknown> => {
+    const print = await fingerprint(question);
+    if (pending !== undefined || index > answers.length) return await hold();
+    const known =
+      index < answers.length ? answers[index] : { q: asking, a: responses?.[`ask-${index}`] };
+    const answer = known?.q === print ? readAnswer(question, known.a) : undefined;
+    if (answer) {
+      answers[index] = { q: print, a: answer };
+      return answer;
+    }
+    pending = inputRequired(index, question, { answers: answers.slice(0, index), asking: print });
+    stop();
+    return await hold();
+  };
   const ask = hostAsk(async (question) => {
     const index = asked++;
-    if (pending === undefined && index <= answers.length) {
-      const reply = index < answers.length ? answers[index] : responses?.[`ask-${index}`];
-      const answer = readAnswer(question, reply);
-      if (answer) {
-        answers[index] = answer;
-        return answer;
-      }
-      pending = inputRequired(index, question, answers.slice(0, index));
-      stop();
-    }
-    return await new Promise<never>(() => {});
+    const reply = turn.then(async () => await settle(index, question));
+    turn = reply.catch(() => undefined);
+    return await reply;
   });
   return { ask, pending: () => pending, stopped: async () => await stopped };
+}
+
+/**
+ * A promise that never settles: the call stays where it asked, whatever `catch` sits around it.
+ *
+ * @returns {Promise<never>} Nothing, ever.
+ */
+async function hold(): Promise<never> {
+  return await new Promise<never>(() => {});
+}
+
+/** One replayed answer and the fingerprint of the question it answered. */
+interface Answered {
+  readonly q: string;
+  readonly a: unknown;
+}
+
+/** What `requestState` carries: every answer so far, and which question is out. */
+interface RoundState {
+  readonly answers: readonly Answered[];
+  readonly asking?: string;
+}
+
+/**
+ * The SHA-256 of a question's message and form, so no answer lands on a changed question.
+ *
+ * @param question - The question, its message cleaned.
+ * @returns {Promise<string>} The digest in hex.
+ */
+async function fingerprint(question: HostQuestion): Promise<string> {
+  const text = JSON.stringify([question.message, question.requested]);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /**
@@ -270,13 +313,13 @@ function quietOnQuestion(
  *
  * @param index - Its place among the call's questions.
  * @param question - The question, its message cleaned.
- * @param answers - Every answer before it.
+ * @param state - Every answer before it, and this question's fingerprint.
  * @returns {InputRequiredResult} What the client gets instead of a result.
  */
 function inputRequired(
   index: number,
   question: HostQuestion,
-  answers: readonly unknown[],
+  state: RoundState,
 ): InputRequiredResult {
   const { message, requested } = question;
   return {
@@ -291,24 +334,37 @@ function inputRequired(
         },
       },
     },
-    requestState: JSON.stringify(answers),
+    requestState: JSON.stringify(state),
   };
 }
 
 /**
- * The answers a `requestState` carries. Anything but a JSON array carries none.
+ * What a `requestState` carries. Anything else carries nothing, and every question is asked again.
  *
  * @param state - The echoed state.
- * @returns {unknown[]} Replies in order, each still to be checked against its question.
+ * @returns {RoundState} Answers in order, each still to be checked against its question.
  */
-function readState(state: string | undefined): unknown[] {
-  if (state === undefined) return [];
+function readState(state: string | undefined): RoundState {
   try {
-    const answers: unknown = JSON.parse(state);
-    return Array.isArray(answers) ? answers : [];
+    const parsed: unknown = JSON.parse(state ?? "{}");
+    const { answers, asking } = (parsed ?? {}) as { answers?: unknown; asking?: unknown };
+    return {
+      answers: Array.isArray(answers) ? answers.filter(isAnswered) : [],
+      ...(typeof asking === "string" ? { asking } : {}),
+    };
   } catch {
-    return [];
+    return { answers: [] };
   }
+}
+
+/**
+ * Whether a state entry has the shape of a replayed answer.
+ *
+ * @param entry - One entry of `answers`.
+ * @returns {boolean} Whether it has a fingerprint next to its answer.
+ */
+function isAnswered(entry: unknown): entry is Answered {
+  return typeof entry === "object" && entry !== null && typeof (entry as Answered).q === "string";
 }
 
 /**
