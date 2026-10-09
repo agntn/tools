@@ -18,7 +18,10 @@ import { Client as SdkV1Client } from "@modelcontextprotocol/sdk/client/index.js
 import { InMemoryTransport as SdkV1Transport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
-import type { CallToolResult as SdkV1Result } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ElicitRequestSchema,
+  type CallToolResult as SdkV1Result,
+} from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { z } from "zod";
 
@@ -42,7 +45,7 @@ import {
 } from "../src/index.ts";
 import { toH3Tools } from "../src/h3.ts";
 import { callTool, createMcpServer, listTools } from "../src/mcp.ts";
-import { callAsking, questionRound } from "../src/mcp-answers.ts";
+import { callAsking, canAsk, questionRound } from "../src/mcp-answers.ts";
 import { hostAsk, requestedSchema, type HostQuestion } from "../src/questions.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
@@ -935,16 +938,21 @@ describe("h3-mcp adapter", () => {
 });
 
 /**
- * An SDK v1 client on an `McpServer` that registers each entry the way the toolkit does.
+ * An `McpServer` that registers each entry the way the toolkit does.
  *
  * The toolkit's own module needs Nitro, so this repeats its `registerToolFromDefinition` call.
  * Bare SDK v1 types the result tighter than the toolkit does, hence the cast.
  *
- * @returns {Promise<SdkV1Client>} Connected client.
+ * @param tools - Tools to serve.
+ * @param elicitation - Whether to pass a `useMcpElicitation` reading the server, like the real one.
+ * @returns {McpServer} Unconnected server.
  */
-async function toolkitClient(): Promise<SdkV1Client> {
+function toolkitServer(tools: readonly ToolDefinition[], elicitation = false): McpServer {
   const server = new McpServer({ name: "demo", version: "0.0.0" });
-  for (const tool of toToolkitTools({ name: "demo" }, [echo, slow, signal, count])) {
+  const options = elicitation
+    ? { elicitation: () => ({ supports: () => canAsk(server.server.getClientCapabilities()) }) }
+    : {};
+  for (const tool of toToolkitTools({ name: "demo" }, tools, options)) {
     server.registerTool(
       tool.name,
       {
@@ -959,8 +967,21 @@ async function toolkitClient(): Promise<SdkV1Client> {
         (await tool.handler(args, extra)) as SdkV1Result,
     );
   }
+  return server;
+}
+
+/**
+ * Connects an SDK v1 client to a toolkit server.
+ *
+ * @param server - Server from `toolkitServer`.
+ * @param client - Client to connect, a plain one when left out.
+ * @returns {Promise<SdkV1Client>} Connected client.
+ */
+async function toolkitClient(
+  server = toolkitServer([echo, slow, signal, count]),
+  client = new SdkV1Client({ name: "test", version: "0.0.0" }),
+): Promise<SdkV1Client> {
   const [clientTransport, serverTransport] = SdkV1Transport.createLinkedPair();
-  const client = new SdkV1Client({ name: "test", version: "0.0.0" });
   open.push(client, server);
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   return client;
@@ -1543,6 +1564,48 @@ async function askingH3Client(
   return asking;
 }
 
+/**
+ * An SDK v1 client on a toolkit server serving `demo_ask`, its forms filled from `script`.
+ *
+ * @param script - Replies in order; once they run out, a question waits until it is cancelled.
+ * @param setup - Whether the server passes `useMcpElicitation`, and what the client declares.
+ * @returns {Promise<AskingToolkit>} The client, its server and what the client saw.
+ */
+async function askingToolkitClient(
+  script: readonly unknown[],
+  setup: Readonly<{ elicitation?: boolean; capabilities?: Readonly<Record<string, unknown>> }> = {},
+): Promise<AskingToolkit> {
+  const { elicitation = true, capabilities = { elicitation: { form: {} } } } = setup;
+  const client = new SdkV1Client({ name: "test", version: "0.0.0" }, { capabilities });
+  const server = toolkitServer([asker], elicitation);
+  const seen: unknown[] = [];
+  const cancelled: string[] = [];
+  const left = [...script];
+  if (capabilities.elicitation !== undefined) {
+    client.setRequestHandler(ElicitRequestSchema, async (request, extra) => {
+      seen.push(request.params);
+      const reply = left.shift();
+      if (reply !== undefined) return reply as never;
+      return await new Promise<never>((_resolve, reject) => {
+        extra.signal.addEventListener("abort", () => {
+          cancelled.push(request.params.message);
+          reject(new Error("cancelled"));
+        });
+      });
+    });
+  }
+  await toolkitClient(server, client);
+  return { client, server, seen, cancelled };
+}
+
+/* What `askingToolkitClient` hands back. */
+interface AskingToolkit {
+  readonly client: SdkV1Client;
+  readonly server: McpServer;
+  readonly seen: unknown[];
+  readonly cancelled: string[];
+}
+
 /* One pass of `demo_ask` over MCP with what a client would send back. */
 async function roundTrip(
   responses: Readonly<Record<string, unknown>> | undefined,
@@ -1798,6 +1861,76 @@ describe("questions", () => {
 
   it("gives no ask over h3-mcp on a 2025 request, which has no way to carry one", async () => {
     const { client } = await askingH3Client(replies);
+    expect(firstText(await client.callTool({ name: "demo_ask", arguments: {} }))).toBe(
+      "nobody to ask",
+    );
+  });
+
+  it("asks a toolkit client on the call's own stream, the call running once", async () => {
+    const { client, seen } = await askingToolkitClient(replies);
+    passes = 0;
+    const result = await client.callTool({ name: "demo_ask", arguments: {} });
+
+    expect(firstText(result)).toBe("red x3 tags=b loud=true note=-");
+    expect(passes).toBe(1);
+    expect(seen).toEqual([
+      colorWire,
+      {
+        mode: "form",
+        message: "Details",
+        requestedSchema: requestedSchema({ message: "", schema: detailsForm }),
+      },
+    ]);
+  });
+
+  it("takes a decline from a toolkit client as the answer", async () => {
+    const { client } = await askingToolkitClient([{ action: "decline" }]);
+    expect(firstText(await client.callTool({ name: "demo_ask", arguments: {} }))).toBe(
+      "color decline",
+    );
+  });
+
+  it("withdraws the session's first toolkit question when the client cancels the call", async () => {
+    const client = new Client(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { elicitation: { form: {} } } },
+    );
+    const asked: unknown[] = [];
+    const cancelled: string[] = [];
+    client.setRequestHandler(
+      "elicitation/create",
+      async (request, ctx) =>
+        await new Promise<never>((_resolve, reject) => {
+          asked.push(ctx.mcpReq.id);
+          ctx.mcpReq.signal.addEventListener("abort", () => {
+            cancelled.push(String(request.params.message));
+            reject(new Error("cancelled"));
+          });
+        }),
+    );
+    const server = toolkitServer([asker], true);
+    const [clientTransport, serverTransport] = SdkV1Transport.createLinkedPair();
+    open.push(client, server);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const stop = new AbortController();
+    const call = client.callTool({ name: "demo_ask", arguments: {} }, { signal: stop.signal });
+    await expect.poll(() => asked).toEqual([0]);
+    stop.abort(new Error("changed my mind"));
+
+    await expect(call).rejects.toThrow("changed my mind");
+    await expect.poll(() => cancelled).toEqual([colorWire.message]);
+  });
+
+  it("gives no ask over the toolkit to a client without elicitation", async () => {
+    const { client, seen } = await askingToolkitClient(replies, { capabilities: {} });
+    expect(firstText(await client.callTool({ name: "demo_ask", arguments: {} }))).toBe(
+      "nobody to ask",
+    );
+    expect(seen).toEqual([]);
+  });
+
+  it("gives no ask over the toolkit without useMcpElicitation", async () => {
+    const { client } = await askingToolkitClient(replies, { elicitation: false });
     expect(firstText(await client.callTool({ name: "demo_ask", arguments: {} }))).toBe(
       "nobody to ask",
     );

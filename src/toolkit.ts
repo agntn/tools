@@ -6,8 +6,9 @@ import { z } from "zod";
 
 import { type ToolCallContext, type ToolDefinition } from "./index.ts";
 import { callTool, listTools, progressSteps } from "./mcp-answers.ts";
+import { hostAsk } from "./questions.ts";
 
-/** The part of the SDK v1 request `extra` a handler reads: abort signal and progress. */
+/** The part of the SDK v1 request `extra` a handler reads: abort signal, progress and questions. */
 export interface ToolkitExtra {
   readonly signal?: AbortSignal;
   readonly _meta?: { readonly progressToken?: string | number };
@@ -20,6 +21,28 @@ export interface ToolkitExtra {
       readonly message: string;
     };
   }) => Promise<void>;
+  /** Both schemas are `never`, so SDK v1's method fits whatever Zod and schema types it carries. */
+  readonly sendRequest?: (
+    request: {
+      readonly method: "elicitation/create";
+      readonly params: {
+        readonly mode: "form";
+        readonly message: string;
+        readonly requestedSchema: never;
+      };
+    },
+    resultSchema: never,
+    options?: { readonly signal?: AbortSignal },
+  ) => Promise<unknown>;
+}
+
+/** The toolkit's `useMcpElicitation`, or anything that knows if the client fills forms. */
+export type ToolkitElicitation = () => { readonly supports: (mode?: "form") => boolean };
+
+/** How `toToolkitTools` reaches the person behind the client. */
+export interface ToolkitOptions {
+  /** Pass `useMcpElicitation` to give `execute` an `ask`. It runs in every handler. */
+  readonly elicitation?: ToolkitElicitation;
 }
 
 /** What a handler answers. The toolkit runs SDK v1, so these types never name the v2 package. */
@@ -50,16 +73,19 @@ export interface ToolkitTool {
 /**
  * Turns tools into toolkit entries that list what `listTools` lists and answer via `callTool`.
  *
- * Progress needs the toolkit's sessions: its stateless default answers in plain JSON.
+ * Progress and questions need the toolkit's sessions: its stateless default answers in plain JSON.
+ * `useMcpElicitation` also needs Nitro's `asyncContext`, since it finds the server in the request.
  *
  * @param info - Server info; `name` is the word in the message for an unknown tool.
  * @param tools - Tools to serve.
+ * @param options - Where `ask` comes from; without it there is none.
  * @returns {ToolkitTool[]} Tool definitions in the order given.
  * @throws {ToolDefinitionError} When two tools share a name.
  */
 export function toToolkitTools(
   info: { readonly name: string },
   tools: readonly ToolDefinition[],
+  options: ToolkitOptions = {},
 ): ToolkitTool[] {
   return listTools(tools).map((entry) => ({
     name: entry.name,
@@ -71,7 +97,11 @@ export function toToolkitTools(
       ? {}
       : { outputSchema: wireObject(entry.outputSchema, false) }),
     ...(entry._meta === undefined ? {} : { _meta: entry._meta }),
-    handler: async (args, extra) => callTool(info, tools, entry.name, args, callContext(extra)),
+    handler: async (args, extra) =>
+      callTool(info, tools, entry.name, args, {
+        ...callContext(extra),
+        ...formAsk(extra, options.elicitation),
+      }),
   }));
 }
 
@@ -123,5 +153,34 @@ function callContext(extra: ToolkitExtra | undefined): ToolCallContext {
             );
           }),
         }),
+  };
+}
+
+/**
+ * An `ask` on this call's own stream. The toolkit's `form()` wants a Zod shape, so only `supports`.
+ *
+ * @param extra - The SDK's request extra, absent when a caller skips it.
+ * @param elicitation - The toolkit's `useMcpElicitation`, when the server passed it.
+ * @returns {Pick<ToolCallContext, "ask">} The `ask`, or nothing for a client that fills no forms.
+ */
+function formAsk(
+  extra: ToolkitExtra | undefined,
+  elicitation: ToolkitElicitation | undefined,
+): Pick<ToolCallContext, "ask"> {
+  const send = extra?.sendRequest;
+  if (send === undefined || elicitation?.().supports("form") !== true) return {};
+  const reply = z.looseObject({}) as never;
+  return {
+    ask: hostAsk(
+      async ({ message, requested }) =>
+        await send(
+          {
+            method: "elicitation/create",
+            params: { mode: "form", message, requestedSchema: requested as never },
+          },
+          reply,
+          { signal: extra?.signal },
+        ),
+    ),
   };
 }
