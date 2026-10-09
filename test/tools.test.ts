@@ -1777,8 +1777,8 @@ describe("questions in Pi and OMP", () => {
       "input Details: Count ()",
       "notify warning Count: must be >= 1",
       "input Details: Count ()",
-      "select Details: tags [[ ] a | [ ] b | Done] signal",
-      "select Details: tags [[x] a | [ ] b | Done] signal",
+      "select Details: tags [[ ] a | [ ] b | Done | (skip)] signal",
+      "select Details: tags [[x] a | [ ] b | Done | (skip)] signal",
       "select Details: loud [Yes | No] signal",
       "input Details: note (Anything else)",
     ]);
@@ -1816,6 +1816,13 @@ describe("questions in Pi and OMP", () => {
 
     expect(drawn).toEqual(["select Which? [a b | a b (2)]"]);
     expect(resultText(result as ToolResult)).toBe('"a b"');
+  });
+
+  it("leaves an optional multiple pick out on (skip), not as an empty list", async () => {
+    const { ctx } = scriptedCtx(["red", "3", "[ ] a", "(skip)", "No", "hi"]);
+    const result = await piAsker().execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(resultText(result as ToolResult)).toBe("red x3 tags=- loud=false note=hi");
   });
 
   it("closes the whole form on Escape", async () => {

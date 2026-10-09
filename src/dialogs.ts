@@ -187,29 +187,52 @@ async function pick(
 }
 
 /**
- * Several picks: a list whose lines toggle until `Done`, starting from the field's default.
+ * Several picks: lines that toggle until `Done`, from the field's default, `(skip)` when optional.
  *
  * @param prompt - The array field and its dialogs.
- * @returns {Promise<Reply>} The picked values in the enum's order, or `CLOSED`.
+ * @returns {Promise<Reply>} The picked values in the enum's order, `SKIP` or `CLOSED`.
  */
 async function toggle(prompt: Prompt): Promise<Reply> {
   const items = prompt.field.items as Field;
   const values = (items.enum as readonly string[]).map(String);
   const picked = new Set(Array.isArray(prompt.field.default) ? prompt.field.default : []);
+  const ends = prompt.optional ? [DONE_LABEL, SKIP_LABEL] : [DONE_LABEL];
+  const ticked = (): string[] => values.filter((value) => picked.has(value));
   for (;;) {
-    const lines = distinct(
-      values.map((value) => `${picked.has(value) ? "[x]" : "[ ]"} ${sanitizeLine(value)}`),
-    );
-    const chosen = await prompt.ui.select(
-      prompt.title,
-      [...lines, DONE_LABEL],
-      signalOption(prompt),
-    );
-    if (chosen === undefined) return CLOSED;
-    if (chosen === DONE_LABEL) return values.filter((value) => picked.has(value));
-    const value = values[lines.indexOf(chosen)];
+    const lines = toggleLines(values, (value) => picked.has(value));
+    const chosen = await prompt.ui.select(prompt.title, [...lines, ...ends], signalOption(prompt));
+    const ending = endOfToggle(chosen, prompt.optional, ticked);
+    if (ending !== undefined) return ending;
+    const value = values[lines.indexOf(chosen ?? "")];
     if (value !== undefined && !picked.delete(value)) picked.add(value);
   }
+}
+
+/**
+ * What a line of the toggle list ends with: the form closed, the ticked values, or a skip.
+ *
+ * @param chosen - The line picked, `undefined` on Escape.
+ * @param optional - Whether the field may be left out.
+ * @param ticked - The values ticked so far.
+ * @returns {Reply} The field's reply, or `undefined` for a line that only toggles.
+ */
+function endOfToggle(chosen: string | undefined, optional: boolean, ticked: () => string[]): Reply {
+  if (chosen === undefined) return CLOSED;
+  if (chosen === DONE_LABEL) return ticked();
+  return optional && chosen === SKIP_LABEL ? SKIP : undefined;
+}
+
+/**
+ * One `[x]` or `[ ]` line per value, each different from the rest.
+ *
+ * @param values - The enum's values.
+ * @param isPicked - Whether a value is ticked.
+ * @returns {string[]} The lines in the enum's order.
+ */
+function toggleLines(values: readonly string[], isPicked: (value: string) => boolean): string[] {
+  return distinct(
+    values.map((value) => `${isPicked(value) ? "[x]" : "[ ]"} ${sanitizeLine(value)}`),
+  );
 }
 
 /**
