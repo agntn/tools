@@ -1577,6 +1577,37 @@ describe("questions", () => {
     });
   });
 
+  it("cleans the labels of a multiple pick's items and of titled choices too", () => {
+    const hostile = "Pick\n\u001B]0;x\u0007one\u202E";
+    const tags = Type.Array(Type.Enum(["a"], { title: hostile }));
+    const titled = Type.Unsafe<string>({
+      type: "string",
+      oneOf: [{ const: "a", title: hostile }],
+    });
+    const { properties } = requestedSchema({
+      message: "",
+      schema: Type.Object({ tags, titled }),
+    });
+
+    expect(properties.tags).toEqual({
+      type: "array",
+      items: { type: "string", enum: ["a"], title: "Pick one" },
+    });
+    expect(properties.titled).toEqual({
+      type: "string",
+      oneOf: [{ const: "a", title: "Pick one" }],
+    });
+  });
+
+  it("refuses a rule on the form's root, which no MCP form can carry", () => {
+    const schema = Type.Object({ a: Type.Optional(Type.String()) }, { minProperties: 1 });
+    expect(() => requestedSchema({ message: "", schema })).toThrow(
+      new ToolDefinitionError(
+        'A question can\'t carry "minProperties" on its Type.Object: an MCP form has no place for it',
+      ),
+    );
+  });
+
   it("types the items of a multiple pick and passes every other field through", () => {
     const suggested = Type.Object({ color: Type.String({ "x-openai-suggestions": ["red"] }) });
     expect(requestedSchema({ message: "", schema: suggested }).properties).toEqual({

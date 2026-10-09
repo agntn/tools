@@ -36,6 +36,16 @@ type Node = Readonly<Record<string, unknown>>;
 
 const PRIMITIVES = new Set(["string", "number", "integer", "boolean"]);
 
+/** What a form's root may say. A rule like `minProperties` reaches no client and fails late. */
+const ROOT_KEYS = new Set([
+  "type",
+  "properties",
+  "required",
+  "additionalProperties",
+  "title",
+  "description",
+]);
+
 /**
  * The schema of a question as MCP elicitation sends it.
  *
@@ -50,6 +60,12 @@ export function requestedSchema(question: ToolQuestion): RequestedSchema {
   const root: unknown = JSON.parse(JSON.stringify(question.schema));
   if (!isRecord(root) || root.type !== "object" || !isRecord(root.properties)) {
     throw new ToolDefinitionError("A question needs a Type.Object of fields");
+  }
+  const extra = Object.keys(root).find((key) => !ROOT_KEYS.has(key));
+  if (extra !== undefined) {
+    throw new ToolDefinitionError(
+      `A question can't carry ${JSON.stringify(extra)} on its Type.Object: an MCP form has no place for it`,
+    );
   }
   const properties = Object.fromEntries(
     Object.entries(root.properties).map(([key, field]) => [key, flatField(key, field)]),
@@ -80,7 +96,7 @@ function flatField(key: string, field: unknown): Node {
 }
 
 /**
- * A field whose `title`, `description` and `oneOf` titles are each one clean line.
+ * A field whose `title`, `description`, item and choice titles are each one clean line.
  *
  * @param field - Field schema.
  * @returns {Node} The field with clean labels. Values stay, since they come back.
@@ -91,14 +107,23 @@ function cleanLabels(field: Node): Node {
       .filter((key) => typeof field[key] === "string")
       .map((key) => [key, sanitizeLine(field[key])]),
   );
-  const oneOf = Array.isArray(field.oneOf)
-    ? {
-        oneOf: field.oneOf.map((branch: unknown) =>
-          isRecord(branch) ? cleanLabels(branch) : branch,
-        ),
-      }
-    : {};
-  return { ...field, ...labels, ...oneOf };
+  const branches = Object.fromEntries(
+    (["oneOf", "anyOf"] as const)
+      .filter((key) => Array.isArray(field[key]))
+      .map((key) => [key, (field[key] as readonly unknown[]).map(cleanBranch)]),
+  );
+  const items = isRecord(field.items) ? { items: cleanLabels(field.items) } : {};
+  return { ...field, ...labels, ...branches, ...items };
+}
+
+/**
+ * One titled choice of a pick, cleaned like a field.
+ *
+ * @param branch - A `oneOf` or `anyOf` entry.
+ * @returns {unknown} The entry with clean labels, or as it was when it isn't an object.
+ */
+function cleanBranch(branch: unknown): unknown {
+  return isRecord(branch) ? cleanLabels(branch) : branch;
 }
 
 /**
