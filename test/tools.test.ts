@@ -360,13 +360,25 @@ describe("validateInput", () => {
 });
 
 describe("portability", () => {
-  it.each(["index.ts", "escapes.ts", "mcp-answers.ts", "h3.ts", "pi.ts", "omp.ts", "ai.ts"])(
-    "keeps node:* out of src/%s",
-    (file) => {
-      const source = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
-      expect(source).not.toMatch(/from "node:/);
-    },
-  );
+  it.each([
+    "index.ts",
+    "escapes.ts",
+    "mcp-answers.ts",
+    "h3.ts",
+    "toolkit.ts",
+    "pi.ts",
+    "omp.ts",
+    "ai.ts",
+  ])("keeps node:* out of src/%s", (file) => {
+    const source = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+    expect(source).not.toMatch(/from "node:/);
+  });
+
+  it("keeps MCP SDK types out of src/toolkit.ts, whose consumers run SDK v1", () => {
+    const source = readFileSync(new URL("../src/toolkit.ts", import.meta.url), "utf8");
+    expect(source).not.toMatch(/@modelcontextprotocol/);
+    expect(source).not.toMatch(/\btype \w+[^;]*from "\.\/mcp-answers/);
+  });
 });
 
 describe("one name, one tool", () => {

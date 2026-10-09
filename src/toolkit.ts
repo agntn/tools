@@ -2,11 +2,10 @@
  * `@nuxtjs/mcp-toolkit` adapter: hands {@link ToolDefinition}s to `defineMcpHandler({ tools })`.
  */
 
-import type { CallToolResult, Tool } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import { type ToolCallContext, type ToolDefinition } from "./index.ts";
-import { callTool, listTools, progressSteps, type ProgressParams } from "./mcp-answers.ts";
+import { callTool, listTools, progressSteps } from "./mcp-answers.ts";
 
 /** The part of the SDK v1 request `extra` a handler reads: abort signal and progress. */
 export interface ToolkitExtra {
@@ -14,8 +13,20 @@ export interface ToolkitExtra {
   readonly _meta?: { readonly progressToken?: string | number };
   readonly sendNotification?: (notification: {
     readonly method: "notifications/progress";
-    readonly params: ProgressParams & { readonly progressToken: string | number };
+    readonly params: {
+      readonly progressToken: string | number;
+      readonly progress: number;
+      readonly total?: number;
+      readonly message: string;
+    };
   }) => Promise<void>;
+}
+
+/** What a handler answers. The toolkit runs SDK v1, so these types never name the v2 package. */
+export interface ToolkitResult {
+  [key: string]: unknown;
+  content: Array<{ [key: string]: unknown; type: string }>;
+  isError?: boolean;
 }
 
 /** One toolkit tool. Schemas stay `unknown`, since pnpm gives the toolkit its own `zod` copy. */
@@ -23,11 +34,17 @@ export interface ToolkitTool {
   readonly name: string;
   readonly title?: string;
   readonly description?: string;
-  readonly annotations?: Tool["annotations"];
+  readonly annotations?: {
+    readonly title?: string;
+    readonly readOnlyHint?: boolean;
+    readonly destructiveHint?: boolean;
+    readonly idempotentHint?: boolean;
+    readonly openWorldHint?: boolean;
+  };
   readonly inputSchema: unknown;
   readonly outputSchema?: unknown;
   readonly _meta?: Record<string, unknown>;
-  readonly handler: (args: unknown, extra?: ToolkitExtra) => Promise<CallToolResult>;
+  readonly handler: (args: unknown, extra?: ToolkitExtra) => Promise<ToolkitResult>;
 }
 
 /**
