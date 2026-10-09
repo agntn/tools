@@ -24,6 +24,7 @@ import {
   sanitizeLine,
   sanitizeText,
   ToolDefinitionError,
+  ToolInputError,
   Type,
   validateInput,
   invokeTool,
@@ -160,6 +161,34 @@ describe("validateInput", () => {
       'Invalid arguments: unknown property "wrod"; takes word, mode',
       "Invalid arguments at /: must have required properties word",
       "Invalid arguments at /mode: must be one of plain, loud",
+    ]);
+  });
+
+  it("keeps the place of each failure apart from its text", async () => {
+    const checked = validateInput(echo, { wrod: "x", mode: "quiet" });
+
+    expect(checked.ok ? [] : checked.issues).toEqual([
+      {
+        line: 'Invalid arguments: unknown property "wrod"; takes word, mode',
+        at: "",
+        problem: 'unknown property "wrod"; takes word, mode',
+      },
+      {
+        line: "Invalid arguments at /: must have required properties word",
+        at: "",
+        problem: "must have required properties word",
+        missing: ["word"],
+      },
+      {
+        line: "Invalid arguments at /mode: must be one of plain, loud",
+        at: "/mode",
+        problem: "must be one of plain, loud",
+      },
+    ]);
+    const thrown = await invokeTool(echo, { mode: "quiet" }).catch((error: unknown) => error);
+    expect(thrown instanceof ToolInputError ? thrown.issues.map((issue) => issue.at) : []).toEqual([
+      "",
+      "/mode",
     ]);
   });
 
@@ -1067,6 +1096,16 @@ describe("Pi adapter", () => {
     const result = await call(ask, { word: "hi" }, ctx, new AbortController().signal);
     expect(asked).toEqual(["Echo? FAKE | Word\thi\nred end | signal"]);
     expect(result).toMatchObject({ content: [{ type: "text", text: "hi" }] });
+  });
+
+  it("refuses bad input before asking, with the same issues as without a question", async () => {
+    const { asked, ctx } = dialog(true);
+    const thrown = await call(ask, { mode: "quiet" }, ctx).catch((error: unknown) => error);
+    const plain = await invokeTool(echo, { mode: "quiet" }).catch((error: unknown) => error);
+    expect(asked).toEqual([]);
+    expect(thrown instanceof ToolInputError ? thrown.issues : "no ToolInputError").toEqual(
+      plain instanceof ToolInputError ? plain.issues : [],
+    );
   });
 
   it("refuses on a no without running the call", async () => {

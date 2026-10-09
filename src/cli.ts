@@ -21,6 +21,8 @@ import {
   sanitizeLine,
   ToolDefinitionError,
   ToolInputError,
+  validateInput,
+  type InputIssue,
   type ToolCallContext,
   type ToolDefinition,
   type ToolProgress,
@@ -927,7 +929,7 @@ function toolInput(fields: readonly Field[], values: Readonly<Record<string, Raw
   const fromStdin = fields.filter((field) => field.stdin && values[field.key] === "-");
   if (fromStdin.length > 1) {
     throw new ToolInputError([
-      `Invalid arguments: stdin can feed one argument, not ${fromStdin.map((field) => field.key).join(" and ")}`,
+      `Invalid arguments: stdin can feed one argument, not ${fromStdin.map(fieldWord).join(" and ")}`,
     ]);
   }
   const errors: string[] = [];
@@ -938,11 +940,72 @@ function toolInput(fields: readonly Field[], values: Readonly<Record<string, Raw
       typeof raw === "object"
         ? { value: raw.map((word) => wordValue(field.restItems ?? {}, word)) }
         : fieldValue(field, raw);
-    if ("error" in read) errors.push(`Invalid arguments at /${field.key}: ${read.error}`);
+    if ("error" in read) errors.push(`Invalid arguments at ${fieldWord(field)}: ${read.error}`);
     else input[field.key] = read.value;
   }
   if (errors.length > 0) throw new ToolInputError(errors);
   return input;
+}
+
+/**
+ * @param field - A field of the command.
+ * @returns {string} As the usage spells it: `<ID>` or `[WORDS...]`, or `--limit` for a flag.
+ */
+function fieldWord(field: Field): string {
+  if (!field.positional) return `--${field.flag}`;
+  const name = `${field.flag.toUpperCase()}${field.rest ? "..." : ""}`;
+  return field.required ? `<${name}>` : `[${name}]`;
+}
+
+/**
+ * @param field - The field the pointer starts at.
+ * @param inner - Pointer tokens below the field, still escaped.
+ * @returns {string} The place in CLI words, like `word 2 of <WORDS...>` or `/x of --point`.
+ */
+function placeIn(field: Field, inner: readonly string[]): string {
+  if (inner.length === 0) return fieldWord(field);
+  const [index = ""] = inner;
+  if (field.restItems !== undefined && inner.length === 1 && /^\d+$/.test(index)) {
+    return `word ${Number(index) + 1} of ${fieldWord(field)}`;
+  }
+  return `/${inner.join("/")} of ${fieldWord(field)}`;
+}
+
+/**
+ * Says a schema failure the way the line was typed: `--limit`, not `/limit`.
+ *
+ * @param fields - The command's fields.
+ * @param issue - The failure as the core reports it.
+ * @returns {string[]} Its lines, or the core's own line when the place is no word of the command.
+ */
+function cliIssueLines(fields: readonly Field[], issue: InputIssue): string[] {
+  const byKey = (key: string) => fields.find((field) => field.key === key);
+  if (issue.at === "" && issue.missing !== undefined) {
+    return issue.missing.map((key) => {
+      const field = byKey(key);
+      return `Invalid arguments: missing ${field ? fieldWord(field) : JSON.stringify(key)}`;
+    });
+  }
+  const [, first, ...inner] = issue.at.split("/");
+  const field =
+    first === undefined ? undefined : byKey(first.replaceAll("~1", "/").replaceAll("~0", "~"));
+  if (field === undefined) return [issue.line];
+  return [`Invalid arguments at ${placeIn(field, inner)}: ${issue.problem}`];
+}
+
+/**
+ * Validates first, so CLI words go to this command's own failures, not to its executor's.
+ *
+ * @param tool - The command's tool.
+ * @param fields - Its fields.
+ * @param input - The input built from the line.
+ * @throws {ToolInputError} When the input fails the schema, one line per failure.
+ */
+function checkInput(tool: ToolDefinition, fields: readonly Field[], input: unknown): void {
+  const checked = validateInput(tool, input);
+  if (checked.ok) return;
+  const lines = checked.issues.flatMap((issue) => cliIssueLines(fields, issue));
+  throw new ToolInputError(lines.length > 0 ? [...new Set(lines)] : checked.lines, checked.issues);
 }
 
 /**
@@ -1133,7 +1196,9 @@ function toolCommand(tool: ToolDefinition): Command {
       const line = progressLine();
       let result;
       try {
-        result = await invokeTool(tool, toolInput(fields, words.values), { ...line.context, host });
+        const input = toolInput(fields, words.values);
+        checkInput(tool, fields, input);
+        result = await invokeTool(tool, input, { ...line.context, host });
       } finally {
         line.wipe();
       }
@@ -1362,10 +1427,7 @@ function commandUsage(options: CliOptions, command: Command): string {
   const positional = command.fields.filter((field) => field.positional);
   const flags = command.fields.filter((field) => !field.positional);
   const takesOptions = flags.length > 0 || command.json;
-  const words = positional.map((field) => {
-    const name = `${field.flag.toUpperCase()}${field.rest ? "..." : ""}`;
-    return field.required ? `<${name}>` : `[${name}]`;
-  });
+  const words = positional.map(fieldWord);
   const rows = [
     ...flags.map((field): [string, string] => [
       `${field.short === undefined ? "" : `-${field.short}, `}${optionSpelling(field)}`,

@@ -133,13 +133,13 @@ describe("CLI commands", () => {
     expect((await run(["measure", "ab", "--weights", '{"x":2}'])).stdout).toBe("4\n");
     expect(await run(["measure", "ab", "--weights", "{x"])).toEqual({
       stdout: "",
-      stderr: "Invalid arguments at /weights: must be JSON\n",
+      stderr: "Invalid arguments at --weights: must be JSON\n",
       exitCode: 1,
     });
     for (const weight of ["1.5", '"2"']) {
       expect(await run(["measure", "ab", "--weights", `{"x":${weight}}`])).toEqual({
         stdout: "",
-        stderr: "Invalid arguments at /weights/x: must be integer\n",
+        stderr: "Invalid arguments at /x of --weights: must be integer\n",
         exitCode: 1,
       });
     }
@@ -181,7 +181,7 @@ describe("CLI commands", () => {
     ]) {
       expect(await scaled(count)).toEqual({
         stdout: "",
-        stderr: "Invalid arguments at /count: must be integer\n",
+        stderr: "Invalid arguments at --count: must be integer\n",
         exitCode: 1,
       });
     }
@@ -199,7 +199,7 @@ describe("CLI commands", () => {
     ]) {
       expect(await scaled("1", factor)).toEqual({
         stdout: "",
-        stderr: "Invalid arguments at /factor: must be number\n",
+        stderr: "Invalid arguments at --factor: must be number\n",
         exitCode: 1,
       });
     }
@@ -252,24 +252,89 @@ describe("CLI commands", () => {
     expect((await picked("--floor", "2", "--code", "2")).stdout).toBe('{"floor":2,"code":2}\n');
     expect((await picked("--code", "ab")).stdout).toBe('{"code":"ab"}\n');
     expect((await picked("--level", "2.0")).stderr).toBe(
-      "Invalid arguments at /level: must be one of 1, 2\n",
+      "Invalid arguments at --level: must be one of 1, 2\n",
     );
     for (const limit of ["1.5", "0x10"]) {
       const { stdout, stderr } = await picked("--limit", limit);
       expect(stdout).toBe("");
-      expect(stderr).toContain("Invalid arguments at /limit: must be integer\n");
+      expect(stderr).toContain("Invalid arguments at --limit: must be integer\n");
     }
   });
 
-  it("fails with the core's validation lines", async () => {
+  it("fails with the core's validation lines, placed by the words of the line", async () => {
     expect(await run(["echo", "a.b", "--times", "9"])).toEqual({
       stdout: "",
       stderr: [
-        'Invalid arguments at /word: must match pattern "^[a-z]+$"',
-        "Invalid arguments at /times: must be <= 3",
+        'Invalid arguments at <WORD>: must match pattern "^[a-z]+$"',
+        "Invalid arguments at --times: must be <= 3",
         "",
       ].join("\n"),
       exitCode: 1,
+    });
+  });
+
+  describe("schema failures in the words of the line", () => {
+    const point = Type.Object(
+      { x: Type.Number(), y: Type.Number() },
+      { additionalProperties: false },
+    );
+    const plot = defineTool({
+      name: "demo_plot",
+      title: "Plot",
+      description: "Plots a point.",
+      effect: "read",
+      input: Type.Object(
+        { label: Type.String(), point, limit: Type.Optional(Type.Integer({ minimum: 1 })) },
+        { additionalProperties: false },
+      ),
+      cli: { positional: ["label"] },
+      execute: (input) => ({ content: [], details: input }),
+    });
+    const cli: CliOptions = { ...options, tools: [plot], default: undefined, fallback: undefined };
+
+    it("names a missing positional as the usage does and a missing flag by its spelling", async () => {
+      expect(await run(["plot"], cli)).toEqual({
+        stdout: "",
+        stderr: "Invalid arguments: missing <LABEL>\nInvalid arguments: missing --point\n",
+        exitCode: 1,
+      });
+      expect((await run(["plot", "--help"], cli)).stdout).toContain(
+        "USAGE demo plot [OPTIONS] <LABEL>\n",
+      );
+    });
+
+    it("names the flag whose bound broke and the flag whose JSON did", async () => {
+      expect(
+        (await run(["plot", "a", "--point", '{"x":1,"y":2,"z":3}', "--limit", "0"], cli)).stderr,
+      ).toBe(
+        [
+          'Invalid arguments at --point: unknown property "z"; takes x, y',
+          "Invalid arguments at --limit: must be >= 1",
+          "",
+        ].join("\n"),
+      );
+      expect((await run(["plot", "a", "--point", '{"x":1}'], cli)).stderr).toBe(
+        "Invalid arguments at --point: must have required properties y\n",
+      );
+      expect((await run(["plot", "a", "--point", '{"x":1,"y":"2"}'], cli)).stderr).toBe(
+        "Invalid arguments at /y of --point: must be number\n",
+      );
+    });
+
+    it("leaves a failure the executor throws from another tool as that tool said it", async () => {
+      const relay = defineTool({
+        name: "demo_relay",
+        title: "Relay",
+        description: "Plots through another tool.",
+        effect: "read",
+        input: Type.Object({ limit: Type.Integer() }, { additionalProperties: false }),
+        execute: async ({ limit }) =>
+          await invokeTool(plot, { label: "a", point: { x: 0, y: 0 }, limit }),
+      });
+      const relayed: CliOptions = { ...cli, tools: [relay] };
+      expect((await run(["relay", "--limit", "0"], relayed)).stderr).toBe(
+        "Invalid arguments at /limit: must be >= 1\n",
+      );
     });
   });
 
@@ -361,7 +426,7 @@ describe("CLI commands", () => {
     const cli: CliOptions = { ...options, tools: [pair], default: undefined, fallback: undefined };
     expect(await run(["pair", "-", "-"], cli)).toEqual({
       stdout: "",
-      stderr: "Invalid arguments: stdin can feed one argument, not a and b\n",
+      stderr: "Invalid arguments: stdin can feed one argument, not <A> and <B>\n",
       exitCode: 1,
     });
   });
@@ -633,7 +698,7 @@ describe("CLI short flags and rest", () => {
 
   it("leaves a required rest to the core when no word is left", async () => {
     const { stderr, exitCode } = await run(["find", "-n", "1"], cli());
-    expect(stderr).toBe("Invalid arguments at /: must have required properties query\n");
+    expect(stderr).toBe("Invalid arguments: missing <QUERY...>\n");
     expect(exitCode).toBe(1);
   });
 
@@ -708,7 +773,7 @@ describe("CLI short flags and rest", () => {
       );
       const some = search(Type.Array(Type.String(), { minItems: 1 }), true);
       expect((await run(["search", "ab12"], cli(some))).stderr).toContain(
-        "Invalid arguments at /words",
+        "Invalid arguments at <WORDS...>: must not have fewer than 1 items\n",
       );
     });
 
@@ -718,10 +783,10 @@ describe("CLI short flags and rest", () => {
         '{"digest":"ab12","words":["red","green"]}\n',
       );
       expect((await run(["search", "ab12", "red", "blue"], cli(colors))).stderr).toContain(
-        "Invalid arguments at /words/1",
+        "Invalid arguments at word 2 of [WORDS...]: must be one of red, green",
       );
       expect((await run(["search", "ab12", "red", "red", "red"], cli(colors))).stderr).toContain(
-        "Invalid arguments at /words",
+        "Invalid arguments at [WORDS...]: must not have more than 2 items\n",
       );
     });
 
@@ -1021,7 +1086,7 @@ describe("CLI process", () => {
     const answer = spawnCli(["measure", "-"], [0xff, 0xfe, 0x41]);
     expect([answer.stdout, answer.stderr, answer.status]).toEqual([
       "",
-      "Invalid arguments at /text: stdin is not UTF-8 text\n",
+      "Invalid arguments at <TEXT>: stdin is not UTF-8 text\n",
       1,
     ]);
   });
@@ -1044,7 +1109,7 @@ describe("CLI process", () => {
     expect(help.stdout).not.toContain("\u001B[");
     const bad = spawnCli(["echo", "hi", "--mode", "x"]);
     expect(bad.status).toBe(1);
-    expect(bad.stderr).toBe("Invalid arguments at /mode: must be one of plain, loud\n");
+    expect(bad.stderr).toBe("Invalid arguments at --mode: must be one of plain, loud\n");
     expect(bad.stderr).not.toContain("\u001B[");
   });
 

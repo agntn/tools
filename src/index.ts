@@ -140,18 +140,34 @@ export class ToolDefinitionError extends Error {
   override name = "ToolDefinitionError";
 }
 
+/** One schema failure, with its place kept apart so a surface can name it in its own words. */
+export interface InputIssue {
+  /** The line as {@link ToolInputError.lines} has it. */
+  readonly line: string;
+  /** JSON pointer of the failing value, empty for the arguments as a whole. */
+  readonly at: string;
+  /** What is wrong there, without the place. */
+  readonly problem: string;
+  /** Required properties the value at `at` lacks, when that is the failure. */
+  readonly missing?: readonly string[];
+}
+
 /** Thrown by {@link invokeTool} when the arguments fail the tool schema. */
 export class ToolInputError extends Error {
   override name = "ToolInputError";
   /** One validation failure per line. Only these line breaks are the core's own. */
   readonly lines: readonly string[];
+  /** The schema failures behind the lines, empty when the lines come from elsewhere. */
+  readonly issues: readonly InputIssue[];
 
   /**
    * @param lines - One validation failure per line.
+   * @param issues - The schema failures behind them, if any.
    */
-  constructor(lines: readonly string[]) {
+  constructor(lines: readonly string[], issues: readonly InputIssue[] = []) {
     super(lines.join("\n"));
     this.lines = lines;
+    this.issues = issues;
   }
 }
 
@@ -300,7 +316,7 @@ export function indexTools(tools: readonly ToolDefinition[]): ReadonlyMap<string
 
 export type InputCheck<Input extends TObject> =
   | { ok: true; value: Static<Input> }
-  | { ok: false; lines: readonly string[] };
+  | { ok: false; lines: readonly string[]; issues: readonly InputIssue[] };
 
 /**
  * Validates arguments against the tool schema, reporting every failure.
@@ -327,29 +343,32 @@ export function validateInput<Input extends TObject>(
     args !== null && typeof args === "object" && !Array.isArray(args)
       ? Object.keys(args).filter((key) => !Object.hasOwn(tool.input.properties, key))
       : [];
-  const unknown = rootKeys.map((key) => unknownKeyLine("", key, [schema]));
-  const other: string[] = [];
+  const unknown = rootKeys.map((key) => unknownKeyIssue("", key, [schema]));
+  const other: InputIssue[] = [];
   for (const error of Value.Errors(tool.input, args)) {
     if (error.keyword === "additionalProperties") continue;
-    const refused = refusedKeyLines(schema, error.instancePath, error.schemaPath);
+    const refused = refusedKeyIssues(schema, error.instancePath, error.schemaPath);
     if (refused === undefined)
-      other.push(errorLine(error.instancePath, error.message, error.params));
+      other.push(errorIssue(error.instancePath, error.message, error.params));
     else unknown.push(...refused);
   }
-  const lines = [...unknown, ...other];
-  return { ok: false, lines: lines.length > 0 ? [...new Set(lines)] : ["Invalid arguments"] };
+  const issues = [...new Map([...unknown, ...other].map((issue) => [issue.line, issue])).values()];
+  if (issues.length === 0) return { ok: false, lines: ["Invalid arguments"], issues };
+  return { ok: false, lines: issues.map((issue) => issue.line), issues };
 }
 
 /**
  * @param at - JSON pointer of the failing value.
  * @param message - TypeBox's message.
  * @param params - TypeBox's parameters of the failure.
- * @returns {string} The line, with the allowed values when an enum failed.
+ * @returns {InputIssue} The failure, with the allowed values when an enum failed.
  */
-function errorLine(at: string, message: string, params: unknown): string {
+function errorIssue(at: string, message: string, params: unknown): InputIssue {
   const allowed = isNode(params) ? params.allowedValues : undefined;
-  const text = Array.isArray(allowed) ? `must be one of ${allowed.join(", ")}` : message;
-  return `Invalid arguments at ${at || "/"}: ${text}`;
+  const problem = Array.isArray(allowed) ? `must be one of ${allowed.join(", ")}` : message;
+  const issue = { line: `Invalid arguments at ${at || "/"}: ${problem}`, at, problem };
+  const missing = isNode(params) ? params.requiredProperties : undefined;
+  return Array.isArray(missing) ? { ...issue, missing: missing.map(String) } : issue;
 }
 
 /**
@@ -358,10 +377,14 @@ function errorLine(at: string, message: string, params: unknown): string {
  * @param root - Tool input schema.
  * @param at - JSON pointer of the failing value.
  * @param schemaPath - Schema path of the failure.
- * @returns {string[] | undefined} The line, none when another union branch takes the key, or
- *   `undefined` for any other failure.
+ * @returns {InputIssue[] | undefined} The failure, none when another union branch takes the key,
+ *   or `undefined` for any other failure.
  */
-function refusedKeyLines(root: SchemaNode, at: string, schemaPath: string): string[] | undefined {
+function refusedKeyIssues(
+  root: SchemaNode,
+  at: string,
+  schemaPath: string,
+): InputIssue[] | undefined {
   const suffix = "/additionalProperties";
   if (!schemaPath.endsWith(suffix)) return undefined;
   const objectPath = schemaPath.slice(0, -suffix.length);
@@ -371,7 +394,7 @@ function refusedKeyLines(root: SchemaNode, at: string, schemaPath: string): stri
   const key = unescapeToken(at.slice(cut + 1));
   const alternatives = alternativesAt(root, objectPath);
   if (alternatives.some((alternative) => takesKey(alternative, key))) return [];
-  return [unknownKeyLine(at.slice(0, cut), key, alternatives)];
+  return [unknownKeyIssue(at.slice(0, cut), key, alternatives)];
 }
 
 /**
@@ -428,9 +451,9 @@ function patternsOf(node: SchemaNode): string[] {
  * @param at - JSON pointer of the object, empty at the root.
  * @param key - The undeclared key.
  * @param objects - Schema of that object, once per union branch it sits in.
- * @returns {string} The key with what the object takes, and the object's path when it is nested.
+ * @returns {InputIssue} The key with what the object takes, and where the object sits when nested.
  */
-function unknownKeyLine(at: string, key: string, objects: readonly SchemaNode[]): string {
+function unknownKeyIssue(at: string, key: string, objects: readonly SchemaNode[]): InputIssue {
   const lists = [
     ...new Set(
       objects
@@ -445,8 +468,8 @@ function unknownKeyLine(at: string, key: string, objects: readonly SchemaNode[])
   ];
   const takes = lists.length > 1 ? lists.map((list) => `{${list}}`).join(" or ") : lists[0];
   const where = at === "" ? "" : ` at ${at}`;
-  const what = takes || "no properties";
-  return `Invalid arguments${where}: unknown property ${JSON.stringify(key)}; takes ${what}`;
+  const problem = `unknown property ${JSON.stringify(key)}; takes ${takes || "no properties"}`;
+  return { line: `Invalid arguments${where}: ${problem}`, at, problem };
 }
 
 /**
@@ -481,7 +504,7 @@ export async function invokeTool(
   context: ToolCallContext = {},
 ): Promise<ToolResult> {
   const checked = validateInput(tool, args);
-  if (!checked.ok) throw new ToolInputError(checked.lines);
+  if (!checked.ok) throw new ToolInputError(checked.lines, checked.issues);
   const { progress } = context;
   if (!progress) return await tool.execute(checked.value, context);
 
