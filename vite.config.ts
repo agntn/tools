@@ -16,11 +16,13 @@ export default defineConfig({
         "error",
         {
           allow: [
-            /* A definition carries TypeBox schemas and an abort signal; no adapter writes to them. */
+            /* These carry TypeBox schemas and a signal; no adapter writes to them. */
             {
               from: "file",
               name: [
                 "ToolDefinition",
+                "ToolQuestion",
+                "HostQuestion",
                 "ToolCallContext",
                 "ToolResult",
                 "OmpToolOptions",

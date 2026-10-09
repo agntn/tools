@@ -7,9 +7,11 @@ import { Server } from "@modelcontextprotocol/server";
 import { indexTools, type ToolDefinition } from "./index.ts";
 import {
   callTool,
+  canAsk,
   copyIcons,
   listTools,
   progressSteps,
+  questionRound,
   type McpServerInfo,
   type ProgressParams,
 } from "./mcp-answers.ts";
@@ -38,6 +40,9 @@ export {
  *
  * A progress notification that fails to send goes to `onerror`, never to the tool.
  *
+ * A client that declares `elicitation` gets `ask`, through `input_required` on both revisions.
+ * A 2026 request carries its capabilities itself, a 2025 one declared them at `initialize`.
+ *
  * @param info - Name, version and optional title, description, icons and website, sent as given.
  * @param tools - Tools to serve.
  * @returns {Server} Unconnected MCP server.
@@ -59,7 +64,7 @@ export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinit
   );
 
   server.setRequestHandler("tools/list", () => ({ tools: listTools(tools) }));
-  server.setRequestHandler("tools/call", (request, ctx) => {
+  server.setRequestHandler("tools/call", async (request, ctx) => {
     const progressToken = ctx.mcpReq._meta?.progressToken;
     const notify = (params: ProgressParams): void => {
       ctx.mcpReq
@@ -68,11 +73,29 @@ export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinit
           server.onerror?.(error instanceof Error ? error : new Error(String(error)));
         });
     };
-    return callTool(info, tools, request.params.name, request.params.arguments, {
+    const envelope = ctx.mcpReq.envelope as Readonly<Record<string, unknown>> | undefined;
+    const capabilities =
+      envelope?.["io.modelcontextprotocol/clientCapabilities"] ?? server.getClientCapabilities();
+    const round = canAsk(capabilities)
+      ? questionRound(ctx.mcpReq.inputResponses, stateOf(ctx.mcpReq.requestState()))
+      : undefined;
+    const result = await callTool(info, tools, request.params.name, request.params.arguments, {
       signal: ctx.mcpReq.signal,
       ...(progressToken === undefined ? {} : { progress: progressSteps(notify) }),
+      ...(round ? { ask: round.ask } : {}),
     });
+    return round?.pending() ?? result;
   });
 
   return server;
+}
+
+/**
+ * The echoed `requestState` as text. The SDK hands it over raw, and only text is ours.
+ *
+ * @param state - What `ctx.mcpReq.requestState()` returned.
+ * @returns {string | undefined} The state, if it is a string.
+ */
+function stateOf(state: unknown): string | undefined {
+  return typeof state === "string" ? state : undefined;
 }

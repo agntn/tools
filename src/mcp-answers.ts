@@ -5,7 +5,13 @@
  * transport that brings its own JSON-RPC layer never loads the SDK.
  */
 
-import type { CallToolResult, Tool, ToolAnnotations } from "@modelcontextprotocol/server";
+import type {
+  CallToolResult,
+  ElicitRequestFormParams,
+  InputRequiredResult,
+  Tool,
+  ToolAnnotations,
+} from "@modelcontextprotocol/server";
 import { Value } from "typebox/value";
 
 import {
@@ -15,10 +21,12 @@ import {
   ToolInputError,
   wireSchema,
   type Icon,
+  type ToolAsk,
   type ToolCallContext,
   type ToolDefinition,
   type ToolResult,
 } from "./index.ts";
+import { hostAsk, readAnswer, type HostQuestion } from "./questions.ts";
 
 export interface McpServerInfo {
   /** Server name, also used in the unknown-tool message. */
@@ -151,6 +159,109 @@ function answer(tool: ToolDefinition, result: ToolResult): CallToolResult {
       (failure) => `at ${failure.instancePath || "/"}: ${failure.message}`,
     ),
   );
+}
+
+/** One pass of a call over MCP: the `ask` for `execute`, and the question it stopped on, if any. */
+export interface QuestionRound {
+  readonly ask: ToolAsk;
+  readonly pending: () => InputRequiredResult | undefined;
+}
+
+/**
+ * Answers questions from what the client sent back, and stops the call at the first one it lacks.
+ *
+ * MCP has no way to pause a call: the server returns `input_required` and the
+ * client calls again with the answer. So every answer so far rides in
+ * `requestState`, the next one in `inputResponses` under `ask-<n>`, and
+ * `execute` runs from the top with each one replayed in order. A reply that
+ * doesn't fit its question, from a client or a tampered state, is asked again.
+ * The state needs no signature: whoever could forge it could forge the reply.
+ *
+ * @param responses - The retry's `inputResponses`, absent on the first pass.
+ * @param state - The retry's `requestState`, absent on the first pass.
+ * @returns {QuestionRound} The `ask` and the question to send, once the call has run.
+ */
+export function questionRound(
+  responses: Readonly<Record<string, unknown>> | undefined,
+  state: string | undefined,
+): QuestionRound {
+  const answers = readState(state);
+  let asked = 0;
+  let pending: InputRequiredResult | undefined;
+  const ask = hostAsk(async (question) => {
+    const index = asked++;
+    if (pending === undefined && index <= answers.length) {
+      const reply = index < answers.length ? answers[index] : responses?.[`ask-${index}`];
+      const answer = readAnswer(question, reply);
+      if (answer) {
+        answers[index] = answer;
+        return answer;
+      }
+      pending = inputRequired(index, question, answers.slice(0, index));
+    }
+    throw new Error("Waiting for the user to answer");
+  });
+  return { ask, pending: () => pending };
+}
+
+/**
+ * The `input_required` result for one question.
+ *
+ * @param index - Its place among the call's questions.
+ * @param question - The question, its message cleaned.
+ * @param answers - Every answer before it.
+ * @returns {InputRequiredResult} What the client gets instead of a result.
+ */
+function inputRequired(
+  index: number,
+  question: HostQuestion,
+  answers: readonly unknown[],
+): InputRequiredResult {
+  const { message, requested } = question;
+  return {
+    resultType: "input_required",
+    inputRequests: {
+      [`ask-${index}`]: {
+        method: "elicitation/create",
+        params: {
+          mode: "form",
+          message,
+          requestedSchema: requested as ElicitRequestFormParams["requestedSchema"],
+        },
+      },
+    },
+    requestState: JSON.stringify(answers),
+  };
+}
+
+/**
+ * The answers a `requestState` carries. Anything but a JSON array carries none.
+ *
+ * @param state - The echoed state.
+ * @returns {unknown[]} Replies in order, each still to be checked against its question.
+ */
+function readState(state: string | undefined): unknown[] {
+  if (state === undefined) return [];
+  try {
+    const answers: unknown = JSON.parse(state);
+    return Array.isArray(answers) ? answers : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Whether a client can fill a form: `elicitation.form`, or a bare `elicitation`, which means form.
+ *
+ * @param capabilities - What the client declared.
+ * @returns {boolean} Whether an `ask` can reach it.
+ */
+export function canAsk(capabilities: unknown): boolean {
+  if (typeof capabilities !== "object" || capabilities === null) return false;
+  const { elicitation } = capabilities as { readonly elicitation?: unknown };
+  if (typeof elicitation !== "object" || elicitation === null) return false;
+  const modes = elicitation as { readonly form?: unknown; readonly url?: unknown };
+  return modes.form !== undefined || modes.url === undefined;
 }
 
 /** One `notifications/progress` without its token. */

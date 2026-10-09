@@ -23,6 +23,7 @@ MCP wants an `inputSchema`. Pi wants `parameters` and a prompt snippet. OMP swap
 - 🪤 **The OMP TypeBox trap, defused.** TypeBox is bundled, so OMP has nothing left to rewrite behind your back.
 - 🧪 **Schema rules at definition time.** An open object or a union of literals fails in `defineTool`. Not three weeks later in a model's hands.
 - ⏳ **Progress that gets somewhere.** `progress?.("still at it")` turns into `onUpdate` in Pi and OMP, `notifications/progress` in MCP and one live line in your terminal. A slow call stops looking like a dead one.
+- 🙋 **Ask the person, not the model.** `ask?.({ message, schema })` becomes MCP elicitation, or one dialog per field in Pi and OMP. Three puzzles match? Let them pick instead of letting the model guess.
 - ⌨️ **A CLI on the side.** `runCli` turns the same tools into commands, no CLI library needed. Flags come from the schema. Hints add positionals, short flags and stdin.
 - 🌐 **Runs anywhere.** No `node:*` import in the core or the host adapters. The docs site runs them in a browser tab. The CLI is the one Node part, as a CLI should be.
 
