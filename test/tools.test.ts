@@ -1890,15 +1890,31 @@ describe("questions", () => {
     );
   });
 
-  it("withdraws a toolkit question when the client cancels the call", async () => {
-    const { client, server, seen, cancelled } = await askingToolkitClient([]);
-    /* SDK v1 clients drop a cancel for request id 0, so the question must not be the first. */
-    await server.server.ping();
+  it("withdraws the session's first toolkit question when the client cancels the call", async () => {
+    const client = new Client(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { elicitation: { form: {} } } },
+    );
+    const asked: unknown[] = [];
+    const cancelled: string[] = [];
+    client.setRequestHandler(
+      "elicitation/create",
+      async (request, ctx) =>
+        await new Promise<never>((_resolve, reject) => {
+          asked.push(ctx.mcpReq.id);
+          ctx.mcpReq.signal.addEventListener("abort", () => {
+            cancelled.push(String(request.params.message));
+            reject(new Error("cancelled"));
+          });
+        }),
+    );
+    const server = toolkitServer([asker], true);
+    const [clientTransport, serverTransport] = SdkV1Transport.createLinkedPair();
+    open.push(client, server);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     const stop = new AbortController();
-    const call = client.callTool({ name: "demo_ask", arguments: {} }, undefined, {
-      signal: stop.signal,
-    });
-    await expect.poll(() => seen.length).toBe(1);
+    const call = client.callTool({ name: "demo_ask", arguments: {} }, { signal: stop.signal });
+    await expect.poll(() => asked).toEqual([0]);
     stop.abort(new Error("changed my mind"));
 
     await expect(call).rejects.toThrow("changed my mind");
