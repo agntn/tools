@@ -2053,6 +2053,21 @@ describe("a question the tool forgot to wait for", () => {
     expect(seen).toHaveLength(1);
   });
 
+  it("swallows nothing it hands out: a refused question left unawaited stays handled", async () => {
+    const sloppy = defineTool({
+      ...hasty,
+      name: "demo_sloppy",
+      execute(_input, { ask }): ToolResult<null> {
+        const nested = Type.Object({ point: Type.Object({ x: Type.Number() }) });
+        void ask?.({ message: "Where?", schema: nested });
+        return { content: [{ type: "text", text: "done" }], details: null };
+      },
+    });
+    const ask = hostAsk(async () => ({ action: "cancel" }));
+
+    expect(resultText(await invokeTool(sloppy, {}, { ask }))).toBe("done");
+  });
+
   it("keeps the Pi call open until its dialog closes", async () => {
     const registered: PiToolDefinition[] = [];
     const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };

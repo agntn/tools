@@ -598,7 +598,8 @@ interface CallQuestions {
  * Questions that reject once the call has settled instead of opening a form nobody reads.
  *
  * Each one stays open until it settles, and the call answers only after that,
- * so a question a tool forgot to `await` still reaches the person.
+ * so a question a tool forgot to `await` still reaches the person. The promise it tracks is
+ * the one `execute` gets, so a refusal nobody awaited never turns into an unhandled rejection.
  *
  * @param tool - Tool being called.
  * @param ask - The host's question.
@@ -607,16 +608,17 @@ interface CallQuestions {
  */
 function closedAfter(tool: ToolDefinition, ask: ToolAsk, settled: () => boolean): CallQuestions {
   const open = new Set<Promise<unknown>>();
+  const asked: ToolAsk = async (question) => {
+    if (settled()) throw new Error(`${tool.name} asked a question after its call had answered`);
+    return await ask(question);
+  };
   return {
-    ask: async (question) => {
-      if (settled()) throw new Error(`${tool.name} asked a question after its call had answered`);
-      const answer = ask(question);
+    ask: (question) => {
+      const answer = asked(question);
+      const release = (): void => void open.delete(answer);
       open.add(answer);
-      try {
-        return await answer;
-      } finally {
-        open.delete(answer);
-      }
+      answer.then(release, release);
+      return answer;
     },
     drained: async () => {
       while (open.size > 0) await Promise.allSettled(open);
