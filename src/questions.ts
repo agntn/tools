@@ -175,7 +175,7 @@ export function readAnswer(
  * @throws {ToolDefinitionError} From the returned function, on a form elicitation can't show.
  */
 export function hostAsk(ask: (question: HostQuestion) => Promise<unknown>): ToolAsk {
-  return async <Schema extends TObject, Content = Static<Schema>>({
+  return async <Schema extends TObject, Content extends Static<Schema> = Static<Schema>>({
     message,
     schema,
   }: {

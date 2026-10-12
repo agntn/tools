@@ -100,7 +100,7 @@ export type ToolAnswer<Content> =
   | { readonly action: "decline" | "cancel" };
 
 /** Puts a {@link ToolQuestion} in front of the user and waits for the {@link ToolAnswer}. */
-export type ToolAsk = <Schema extends TObject, Content = Static<Schema>>(
+export type ToolAsk = <Schema extends TObject, Content extends Static<Schema> = Static<Schema>>(
   question: ToolQuestion<Schema>,
 ) => Promise<ToolAnswer<Content>>;
 
