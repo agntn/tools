@@ -40,6 +40,7 @@ import {
   invokeTool,
   resultText,
   type Icon,
+  type ToolAnswer,
   type ToolCallContext,
   type ToolDefinition,
   type ToolResult,
@@ -1753,6 +1754,14 @@ describe("questions", () => {
       type: "string",
       oneOf: [{ const: "a", title: "Pick one" }],
     });
+  });
+
+  it("types an answer from its form, whatever the caller expects", async () => {
+    const ask = hostAsk(async () => ({ action: "accept", content: { count: 2 } }));
+    const schema = Type.Object({ count: Type.Number() });
+    /* @ts-expect-error */
+    const answer: ToolAnswer<{ name: string }> = await ask({ message: "How many?", schema });
+    expect(answer).toEqual({ action: "accept", content: { count: 2 } });
   });
 
   it("refuses a rule on the form's root, which no MCP form can carry", () => {

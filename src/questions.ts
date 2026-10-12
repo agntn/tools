@@ -175,18 +175,18 @@ export function readAnswer(
  * @throws {ToolDefinitionError} From the returned function, on a form elicitation can't show.
  */
 export function hostAsk(ask: (question: HostQuestion) => Promise<unknown>): ToolAsk {
-  return async <Schema extends TObject>({
+  return async <Schema extends TObject, Content extends Static<Schema> = Static<Schema>>({
     message,
     schema,
   }: {
     readonly message: string;
     readonly schema: Schema;
-  }): Promise<ToolAnswer<Static<Schema>>> => {
+  }): Promise<ToolAnswer<Content>> => {
     const question = { message: sanitizeText(message), schema };
     const reply = await ask({ ...question, requested: requestedSchema(question) });
     const answer = readAnswer(question, reply);
     if (!answer) throw new Error("The answer doesn't fit the question");
-    return answer as ToolAnswer<Static<Schema>>;
+    return answer as ToolAnswer<Content>;
   };
 }
 
