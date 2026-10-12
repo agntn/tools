@@ -47,7 +47,7 @@ export default defineConfig({
         },
       ],
     },
-    ignorePatterns: ["dist", "docs"],
+    ignorePatterns: ["dist", "docs", "test/copies"],
   },
   test: {
     include: ["test/**/*.test.ts"],

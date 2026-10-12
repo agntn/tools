@@ -6,7 +6,7 @@
  * schema that asked for it: a client or a dialog may hand back anything.
  */
 
-import type { Static, TObject } from "typebox";
+import type { TObject } from "typebox";
 import { Value } from "typebox/value";
 
 import { sanitizeText } from "./escapes.ts";
@@ -14,6 +14,7 @@ import {
   sanitizeLine,
   ToolDefinitionError,
   type ToolAnswer,
+  type ToolAnswerContent,
   type ToolAsk,
   type ToolQuestion,
 } from "./index.ts";
@@ -168,7 +169,7 @@ export function readAnswer(
 /**
  * Builds the `ask` an adapter hands to `execute` from the host's own way of asking.
  *
- * The reply passes `Value.Check` in `readAnswer`, which is what makes it a `Static<Schema>`.
+ * The reply passes `Value.Check` in `readAnswer`, which is what makes it a `ToolAnswerContent`.
  *
  * @param ask - Shows one question and resolves with the raw reply.
  * @returns {ToolAsk} Checks the form first, cleans the message and checks the reply.
@@ -181,12 +182,12 @@ export function hostAsk(ask: (question: HostQuestion) => Promise<unknown>): Tool
   }: {
     readonly message: string;
     readonly schema: Schema;
-  }): Promise<ToolAnswer<Static<Schema>>> => {
+  }): Promise<ToolAnswer<ToolAnswerContent<Schema>>> => {
     const question = { message: sanitizeText(message), schema };
     const reply = await ask({ ...question, requested: requestedSchema(question) });
     const answer = readAnswer(question, reply);
     if (!answer) throw new Error("The answer doesn't fit the question");
-    return answer as ToolAnswer<Static<Schema>>;
+    return answer as ToolAnswer<ToolAnswerContent<Schema>>;
   };
 }
 

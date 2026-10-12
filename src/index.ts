@@ -99,10 +99,45 @@ export type ToolAnswer<Content> =
   | { readonly action: "accept"; readonly content: Content }
   | { readonly action: "decline" | "cancel" };
 
+/** One field's value, read off the `~kind` TypeBox stamps on every schema type. */
+type AnswerField<Field> = Field extends { readonly "~unsafe": unknown }
+  ? Field["~unsafe"]
+  : Field extends { readonly "~kind": "Enum"; readonly enum: readonly unknown[] }
+    ? Field["enum"][number]
+    : Field extends { readonly "~kind": "Literal"; readonly const: unknown }
+      ? Field["const"]
+      : Field extends { readonly "~kind": "String" }
+        ? string
+        : Field extends { readonly "~kind": "Number" | "Integer" }
+          ? number
+          : Field extends { readonly "~kind": "Boolean" }
+            ? boolean
+            : Field extends { readonly "~kind": "Array"; readonly items: unknown }
+              ? AnswerField<Field["items"]>[]
+              : unknown;
+
+/** Keys of the fields wrapped in `Type.Optional`. */
+type OptionalKeys<Properties> = {
+  [Key in keyof Properties]-?: Properties[Key] extends { readonly "~optional": true } ? Key : never;
+}[keyof Properties];
+
+/** Required fields and optional ones, split the way `Static` splits them. */
+type AnswerFields<Properties> = {
+  [Key in Exclude<keyof Properties, OptionalKeys<Properties>>]: AnswerField<Properties[Key]>;
+} & { [Key in OptionalKeys<Properties>]?: AnswerField<Properties[Key]> };
+
+/**
+ * The fields of an `accept`, typed as `Static` types every shape a question takes.
+ * Not `Static` itself: two copies of this package bundle two TypeBoxes, and those never agree.
+ */
+export type ToolAnswerContent<Schema extends TObject> = {
+  [Key in keyof AnswerFields<Schema["properties"]>]: AnswerFields<Schema["properties"]>[Key];
+};
+
 /** Puts a {@link ToolQuestion} in front of the user and waits for the {@link ToolAnswer}. */
 export type ToolAsk = <Schema extends TObject>(
   question: ToolQuestion<Schema>,
-) => Promise<ToolAnswer<Static<Schema>>>;
+) => Promise<ToolAnswer<ToolAnswerContent<Schema>>>;
 
 /** An MCP icon, the SDK's own shape: a URL or `data:` URI a client can draw on its card. */
 export interface Icon {

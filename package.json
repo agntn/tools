@@ -57,7 +57,7 @@
     "lint": "vp lint && vp fmt --check",
     "lint:fix": "vp lint --fix && vp fmt",
     "typecheck": "tsc --noEmit --skipLibCheck",
-    "typecheck:dist": "tsc -p tsconfig.dist.json",
+    "typecheck:dist": "tsc -p tsconfig.dist.json && tsc -p test/copies",
     "test": "vp test run",
     "test:watch": "vp test watch",
     "release": "pnpm test && pnpm build && pnpm typecheck:dist && changelogen --release --push"
