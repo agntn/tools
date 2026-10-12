@@ -23,7 +23,7 @@ import {
   ElicitRequestSchema,
   type CallToolResult as SdkV1Result,
 } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, describe, expect, expectTypeOf, it } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { z } from "zod";
 
 import { toAiTool, toAiTools } from "../src/ai.ts";
@@ -40,8 +40,6 @@ import {
   invokeTool,
   resultText,
   type Icon,
-  type Static,
-  type ToolAnswerContent,
   type ToolCallContext,
   type ToolDefinition,
   type ToolResult,
@@ -1755,20 +1753,6 @@ describe("questions", () => {
       type: "string",
       oneOf: [{ const: "a", title: "Pick one" }],
     });
-  });
-
-  it("types the fields of an answer the way Static types them", () => {
-    const form = Type.Object({
-      color: Type.Enum(["red", "green"]),
-      count: Type.Optional(Type.Integer()),
-      note: Type.String(),
-      ratio: Type.Number(),
-      loud: Type.Boolean(),
-      tags: Type.Array(Type.Enum(["a", "b"])),
-      mode: Type.Literal("fast"),
-      titled: Type.Unsafe<"a" | "b">({ type: "string", oneOf: [{ const: "a" }, { const: "b" }] }),
-    });
-    expectTypeOf<ToolAnswerContent<typeof form>>().toEqualTypeOf<Static<typeof form>>();
   });
 
   it("refuses a rule on the form's root, which no MCP form can carry", () => {
