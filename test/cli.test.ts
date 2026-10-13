@@ -15,8 +15,10 @@ import {
 import {
   defineTool,
   invokeTool,
+  ToolInputError,
   ToolDefinitionError,
   Type,
+  type InputIssue,
   type ToolDefinition,
   type TSchema,
 } from "../src/index.ts";
@@ -334,6 +336,53 @@ describe("CLI commands", () => {
       const relayed: CliOptions = { ...cli, tools: [relay] };
       expect((await run(["relay", "--limit", "0"], relayed)).stderr).toBe(
         "Invalid arguments at /limit: must be >= 1\n",
+      );
+    });
+
+    it("names the flag in a refusal the executor throws itself", async () => {
+      const refusal = (issues: readonly InputIssue[]) =>
+        new ToolInputError(
+          issues.map((issue) => issue.line),
+          issues,
+        );
+      const cipher = defineTool({
+        name: "demo_cipher",
+        title: "Cipher",
+        description: "Shifts text by a key.",
+        effect: "read",
+        input: Type.Object(
+          { text: Type.String(), key: Type.Optional(Type.String()), mode: Type.String() },
+          { additionalProperties: false },
+        ),
+        cli: { positional: ["text"] },
+        execute: ({ mode }) => {
+          if (mode === "bare") throw new ToolInputError(["Invalid arguments: key and text clash"]);
+          throw refusal([
+            {
+              line: "Invalid arguments at /key: required for vigenere",
+              at: "/key",
+              problem: "required for vigenere",
+            },
+            { line: "Invalid arguments at /text: too short", at: "/text", problem: "too short" },
+            {
+              line: "Invalid arguments at /alphabet: unknown",
+              at: "/alphabet",
+              problem: "unknown",
+            },
+          ]);
+        },
+      });
+      const ciphers: CliOptions = { ...cli, tools: [cipher] };
+      expect((await run(["cipher", "abc", "--mode", "vigenere"], ciphers)).stderr).toBe(
+        [
+          "Invalid arguments at --key: required for vigenere",
+          "Invalid arguments at <TEXT>: too short",
+          "Invalid arguments at /alphabet: unknown",
+          "",
+        ].join("\n"),
+      );
+      expect((await run(["cipher", "abc", "--mode", "bare"], ciphers)).stderr).toBe(
+        "Invalid arguments: key and text clash\n",
       );
     });
   });

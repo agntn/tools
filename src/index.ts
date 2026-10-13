@@ -191,15 +191,19 @@ export class ToolInputError extends Error {
   readonly lines: readonly string[];
   /** The schema failures behind the lines, empty when the lines come from elsewhere. */
   readonly issues: readonly InputIssue[];
+  /** The tool whose schema turned the input down, unset on a refusal an executor wrote itself. */
+  readonly tool: string | undefined;
 
   /**
    * @param lines - One validation failure per line.
    * @param issues - The schema failures behind them, if any.
+   * @param tool - Name of the tool whose schema failed, when the core validated.
    */
-  constructor(lines: readonly string[], issues: readonly InputIssue[] = []) {
+  constructor(lines: readonly string[], issues: readonly InputIssue[] = [], tool?: string) {
     super(lines.join("\n"));
     this.lines = lines;
     this.issues = issues;
+    this.tool = tool;
   }
 }
 
@@ -551,7 +555,7 @@ export async function invokeTool(
   context: ToolCallContext = {},
 ): Promise<ToolResult> {
   const checked = validateInput(tool, args);
-  if (!checked.ok) throw new ToolInputError(checked.lines, checked.issues);
+  if (!checked.ok) throw new ToolInputError(checked.lines, checked.issues, tool.name);
   const { progress, ask } = context;
   if (!progress && !ask) return await tool.execute(checked.value, context);
 
