@@ -246,6 +246,8 @@ describe("validateInput", () => {
       "",
       "/mode",
     ]);
+    expect(thrown instanceof ToolInputError ? thrown.tool : "no ToolInputError").toBe(echo.name);
+    expect(new ToolInputError(["Invalid arguments: no"]).tool).toBeUndefined();
   });
 
   it("names an unknown key inside a nested object with the keys that object takes", () => {

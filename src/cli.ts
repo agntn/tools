@@ -26,6 +26,7 @@ import {
   type ToolCallContext,
   type ToolDefinition,
   type ToolProgress,
+  type ToolResult,
 } from "./index.ts";
 import type { McpServerInfo } from "./mcp-answers.ts";
 
@@ -1039,7 +1040,20 @@ function cliIssueLines(fields: readonly Field[], issue: InputIssue): string[] {
 }
 
 /**
- * Validates first, so CLI words go to this command's own failures, not to its executor's.
+ * @param fields - The command's fields.
+ * @param refusal - Lines and issues pointing into this command's input.
+ * @returns {readonly string[]} The lines in CLI words, or as they were when no issue maps.
+ */
+function cliLines(
+  fields: readonly Field[],
+  refusal: Pick<ToolInputError, "issues" | "lines">,
+): readonly string[] {
+  const lines = refusal.issues.flatMap((issue) => cliIssueLines(fields, issue));
+  return lines.length > 0 ? [...new Set(lines)] : refusal.lines;
+}
+
+/**
+ * Validates first, so CLI words go to this command's own failures, not to another tool's.
  *
  * @param tool - The command's tool.
  * @param fields - Its fields.
@@ -1048,9 +1062,30 @@ function cliIssueLines(fields: readonly Field[], issue: InputIssue): string[] {
  */
 function checkInput(tool: ToolDefinition, fields: readonly Field[], input: unknown): void {
   const checked = validateInput(tool, input);
-  if (checked.ok) return;
-  const lines = checked.issues.flatMap((issue) => cliIssueLines(fields, issue));
-  throw new ToolInputError(lines.length > 0 ? [...new Set(lines)] : checked.lines, checked.issues);
+  if (!checked.ok) throw new ToolInputError(cliLines(fields, checked), checked.issues, tool.name);
+}
+
+/**
+ * Runs the tool. Its executor's own refusal gets CLI words, one relayed from another tool doesn't.
+ *
+ * @param tool - The command's tool.
+ * @param fields - Its fields.
+ * @param input - The checked input.
+ * @param context - Progress and host for the call.
+ * @returns {Promise<ToolResult>} The executor's result.
+ */
+async function invokeInCliWords(
+  tool: ToolDefinition,
+  fields: readonly Field[],
+  input: unknown,
+  context: ToolCallContext,
+): Promise<ToolResult> {
+  try {
+    return await invokeTool(tool, input, context);
+  } catch (error) {
+    if (!(error instanceof ToolInputError) || error.tool !== undefined) throw error;
+    throw new ToolInputError(cliLines(fields, error), error.issues);
+  }
 }
 
 /**
@@ -1243,7 +1278,7 @@ function toolCommand(tool: ToolDefinition): Command {
       try {
         const input = toolInput(fields, words.values);
         checkInput(tool, fields, input);
-        result = await invokeTool(tool, input, { ...line.context, host });
+        result = await invokeInCliWords(tool, fields, input, { ...line.context, host });
       } finally {
         line.wipe();
       }

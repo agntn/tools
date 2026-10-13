@@ -143,7 +143,7 @@ async function approve(
   ctx: ExtensionContext,
 ): Promise<void> {
   const checked = validateInput(tool, params);
-  if (!checked.ok) throw new ToolInputError(checked.lines, checked.issues);
+  if (!checked.ok) throw new ToolInputError(checked.lines, checked.issues, tool.name);
   const question = await ask(checked.value);
   if (question === undefined) return;
   if (!ctx.hasUI) throw new Error(`${tool.name} needs interactive approval in Pi TUI or RPC mode`);
