@@ -1389,11 +1389,14 @@ export function createCli(options: CliOptions): Cli {
   return { run: (argv) => dispatch(options, commands, normalizeArgv(options, argv)) };
 }
 
+/** Flags the root answers itself, so a line that opens with one never reaches `fallback`. */
+const ROOT_FLAGS: ReadonlySet<string> = new Set(["--help", "-h", "--version", "-v"]);
+
 /**
  * Applies `default` and `fallback`: an empty command line runs `default`, and
  * a first word that names no command goes to `fallback` as its first
- * argument. A leading option such as `--help` stays at the root; a lone `-`
- * is the stdin word of the fallback's positional, not an option.
+ * argument, a flag included, so `web --provider brave query` searches. Only
+ * the root's own `--help` and `--version` stay at the root.
  *
  * @param options - CLI options.
  * @param argv - Words after the executable and script.
@@ -1402,8 +1405,11 @@ export function createCli(options: CliOptions): Cli {
 export function normalizeArgv(options: CliOptions, argv: readonly string[]): string[] {
   const [first] = argv;
   if (first === undefined) return options.default === undefined ? [] : [options.default];
-  const option = first.startsWith("-") && first !== "-";
-  if (options.fallback === undefined || option || commandWords(options).includes(first)) {
+  if (
+    options.fallback === undefined ||
+    ROOT_FLAGS.has(first) ||
+    commandWords(options).includes(first)
+  ) {
     return [...argv];
   }
   return [options.fallback, ...argv];

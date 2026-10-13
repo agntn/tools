@@ -131,6 +131,21 @@ describe("CLI commands", () => {
     expect((await run(["len", "abc"])).stdout).toBe("3\n");
   });
 
+  it("hands the fallback a line that opens with one of its flags", async () => {
+    expect(normalizeArgv(options, ["--times", "2", "hi"])).toEqual(["echo", "--times", "2", "hi"]);
+    expect((await run(["--times", "2", "hi"])).stdout).toBe("hihi\n");
+    expect((await run(["--json", "hi"])).stdout).toBe(
+      `${JSON.stringify({ word: "hi", times: 1 }, null, 2)}\n`,
+    );
+    for (const root of ["--help", "-h", "--version", "-v"]) {
+      expect(normalizeArgv(options, [root, "hi"])).toEqual([root, "hi"]);
+    }
+    expect((await run(["--version"])).stdout).toBe("1.2.3\n");
+    const typo = await run(["--tims", "2", "hi"]);
+    expect(typo.stderr).toContain("--tims");
+    expect(typo.exitCode).toBe(1);
+  });
+
   it("parses JSON for object properties and names a value that is not JSON", async () => {
     expect((await run(["measure", "ab", "--weights", '{"x":2}'])).stdout).toBe("4\n");
     expect(await run(["measure", "ab", "--weights", "{x"])).toEqual({
