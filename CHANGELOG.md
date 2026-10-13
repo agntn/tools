@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.2.4
+
+[compare changes](https://github.com/agntn/tools/compare/v0.2.3...v0.2.4)
+
+### 🩹 Fixes
+
+- Fit tools from another package copy ([#95](https://github.com/agntn/tools/pull/95))
+- Name the flag in a tool refusal ([#97](https://github.com/agntn/tools/pull/97))
+- Let the fallback take a leading flag ([#98](https://github.com/agntn/tools/pull/98))
+
+### 📖 Documentation
+
+- Keep the Docus page tools ([#99](https://github.com/agntn/tools/pull/99))
+
+### ❤️ Contributors
+
+- Aeitwoen ([@aeitwoen](https://github.com/aeitwoen))
+- Ori ([@oritwoen](https://github.com/oritwoen))
+
 ## v0.2.3
 
 [compare changes](https://github.com/agntn/tools/compare/v0.2.2...v0.2.3)
