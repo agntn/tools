@@ -64,7 +64,7 @@
   },
   "devDependencies": {
     "@agntn/ox": "0.1.0",
-    "@earendil-works/pi-coding-agent": "1.0.1",
+    "@earendil-works/pi-coding-agent": "1.0.4",
     "@modelcontextprotocol/client": "2.2.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@modelcontextprotocol/server": "2.2.0",
