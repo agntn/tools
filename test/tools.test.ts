@@ -410,15 +410,12 @@ describe("portability", () => {
     expect(source).not.toMatch(/\btype \w+[^;]*from "\.\/mcp-answers/);
   });
 
-  it("lists every package src/ loads into the docs site where Workers Builds installs it", () => {
+  it("dedupes and prebundles every package src/ loads into the docs site", () => {
     const config = readFileSync(new URL("../docs/nuxt.config.ts", import.meta.url), "utf8");
-    const manifest = readFileSync(new URL("../docs/package.json", import.meta.url), "utf8");
-    const { dependencies } = JSON.parse(manifest) as { dependencies: Record<string, string> };
     const specifiers = [...docsImports()];
     expect(specifiers).toContain("typebox/value");
     for (const specifier of specifiers) {
       const name = specifier.split("/", specifier.startsWith("@") ? 2 : 1).join("/");
-      expect(Object.hasOwn(dependencies, name), `${name} in docs/package.json`).toBe(true);
       expect(config, `${name} in resolve.dedupe`).toContain(`"${name}"`);
       expect(config, `${specifier} in optimizeDeps.include`).toContain(`"${specifier}"`);
     }

@@ -18,8 +18,10 @@ jobs:
         with:
           node-version: v26.10.0
           cache: true
+          # Lint skips docs/, so the site's Nuxt and workerd stay out of this job.
           run-install: |
             - cwd: .
+              args: ['--filter', '@agntn/tools']
 
       - name: Fix lint issues
         run: pnpm run lint:fix
