@@ -43,6 +43,7 @@ import {
   type ToolAnswer,
   type ToolCallContext,
   type ToolDefinition,
+  type ToolEffect,
   type ToolResult,
 } from "../src/index.ts";
 import { toH3Tools } from "../src/h3.ts";
@@ -621,6 +622,114 @@ describe("host context", () => {
   });
 });
 
+let parked: PromiseWithResolvers<ToolResult<null>> | undefined;
+let parkedContext: ToolCallContext | undefined;
+/* Never looks at its signal and answers only when the test settles `parked`. */
+function parking(effect: ToolEffect): ToolDefinition {
+  return defineTool({
+    name: `demo_park_${effect}`,
+    title: "Demo Park",
+    description: "Wait until the test answers.",
+    effect,
+    input: Type.Object({}),
+    async execute(_input, context): Promise<ToolResult<null>> {
+      parkedContext = context;
+      parked = Promise.withResolvers();
+      return await parked.promise;
+    },
+  });
+}
+
+/* The call's error, "answered", or "pending" when it is still waiting a moment later. */
+async function outcome(call: () => Promise<unknown>): Promise<unknown> {
+  const later = new Promise<string>((resolve) => setTimeout(resolve, 100, "pending"));
+  return await Promise.race([
+    call().then(
+      () => "answered",
+      (error: unknown) => error,
+    ),
+    later,
+  ]);
+}
+
+describe("cancelling", () => {
+  const done: ToolResult<null> = { content: [{ type: "text", text: "done" }], details: null };
+
+  it("lets a read go the moment its signal aborts", async () => {
+    const cancel = new AbortController();
+    const call = invokeTool(parking("read"), {}, { signal: cancel.signal });
+    cancel.abort();
+
+    expect(await outcome(() => call)).toMatchObject({ name: "AbortError" });
+    parked?.resolve(done);
+  });
+
+  it("never starts a read that arrives cancelled", async () => {
+    parked = undefined;
+    const call = invokeTool(parking("read"), {}, { signal: AbortSignal.abort() });
+
+    expect(await outcome(() => call)).toMatchObject({ name: "AbortError" });
+    expect(parked).toBeUndefined();
+  });
+
+  it("swallows a failure that lands after the cancel, and its progress", async () => {
+    const lines: string[] = [];
+    const cancel = new AbortController();
+    const call = invokeTool(
+      parking("read"),
+      {},
+      { signal: cancel.signal, progress: (message) => lines.push(message) },
+    );
+    cancel.abort();
+
+    expect(await outcome(() => call)).toMatchObject({ name: "AbortError" });
+    parkedContext?.progress?.("too late");
+    parked?.reject(new Error("socket hang up"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(lines).toEqual([]);
+  });
+
+  it.each(["write", "destructive", "exec"] as const)(
+    "waits out a cancelled %s, since the host may already have it",
+    async (effect) => {
+      const cancel = new AbortController();
+      const call = invokeTool(parking(effect), {}, { signal: cancel.signal });
+      cancel.abort();
+
+      expect(await outcome(() => call)).toBe("pending");
+      parked?.resolve(done);
+      expect(resultText(await call)).toBe("done");
+    },
+  );
+
+  it.each(["Pi", "OMP"])("lets %s go when Esc cancels a read", async (host) => {
+    const registered: Array<PiToolDefinition | OmpToolDefinition> = [];
+    const register = (definition: PiToolDefinition | OmpToolDefinition): number =>
+      registered.push(definition);
+    if (host === "Pi") {
+      registerPiTools({ registerTool: register } as unknown as PiExtensionAPI, [parking("read")]);
+    } else {
+      const pi = { typebox: { Type: { Unsafe: (document: unknown) => document } } };
+      registerOmpTools(
+        { ...pi, registerTool: register } as unknown as ExtensionAPI,
+        [parking("read")],
+        {
+          Text: class {} as unknown as OmpToolOptions["Text"],
+        },
+      );
+    }
+    const [tool] = registered;
+    if (!tool) throw new Error("nothing registered");
+    const cancel = new AbortController();
+
+    const call = tool.execute("call-1", {}, cancel.signal, undefined, {} as never);
+    cancel.abort();
+
+    expect(await outcome(() => call)).toMatchObject({ name: "AbortError" });
+    parked?.resolve(done);
+  });
+});
+
 const open: Array<{ close(): Promise<void> }> = [];
 afterEach(async () => {
   await Promise.all(open.splice(0).map((connection) => connection.close()));
@@ -782,21 +891,22 @@ describe("MCP adapter", () => {
   });
 
   it("hands callTool's context to the executor", async () => {
+    const { signal } = new AbortController();
     const probe = defineTool({
       name: "demo_signal",
       title: "Demo Signal",
-      description: "Report whether the call was aborted.",
+      description: "Report whether the call got the caller's signal.",
       effect: "read",
       input: Type.Object({}),
       execute: (_input, context) => ({
-        content: [{ type: "text", text: String(context.signal?.aborted) }],
+        content: [{ type: "text", text: String(context.signal === signal) }],
         details: null,
       }),
     });
 
-    expect(
-      await callTool({ name: "demo" }, [probe], "demo_signal", {}, { signal: AbortSignal.abort() }),
-    ).toEqual({ content: [{ type: "text", text: "true" }] });
+    expect(await callTool({ name: "demo" }, [probe], "demo_signal", {}, { signal })).toEqual({
+      content: [{ type: "text", text: "true" }],
+    });
   });
 
   it("sends progress to a client that asked, skipping a step back", async () => {

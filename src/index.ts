@@ -120,6 +120,7 @@ export interface Icon {
 
 /** Per-call context the adapters hand to `execute`. */
 export interface ToolCallContext {
+  /** On cancel a read answers at once and a write still waits. Pass it on so the work stops too. */
   signal?: AbortSignal;
   /** Says the call is still at it. Absent where the host can't show it, so call `progress?.()`. */
   progress?: (message: string, amount?: ToolProgress) => void;
@@ -545,7 +546,8 @@ function schemaAt(root: SchemaNode, pointer: string): SchemaNode | undefined {
  *
  * Progress is best effort: a line after the call settles goes nowhere, and a host that throws on
  * one doesn't fail the call. The call answers once every question it started has settled, and a
- * question after that point rejects: nobody waits for the answer.
+ * question after that point rejects: nobody waits for the answer. A cancelled read doesn't wait
+ * for anything and rejects with the abort reason. A write waits, since the host may have it.
  *
  * @param tool - Tool to run.
  * @param args - Arguments as received from the host.
@@ -560,21 +562,51 @@ export async function invokeTool(
 ): Promise<ToolResult> {
   const checked = validateInput(tool, args);
   if (!checked.ok) throw new ToolInputError(checked.lines, checked.issues, tool.name);
+  const signal = tool.effect === "read" ? context.signal : undefined;
+  signal?.throwIfAborted();
   const { progress, ask } = context;
-  if (!progress && !ask) return await tool.execute(checked.value, context);
+  if (!progress && !ask)
+    return await untilAborted(() => tool.execute(checked.value, context), signal);
 
   let settled = false;
   const questions = ask ? closedAfter(tool, ask, () => settled) : undefined;
+  const call = async (): Promise<ToolResult> => {
+    try {
+      return await tool.execute(checked.value, {
+        ...context,
+        ...(progress ? { progress: quietAfter(progress, () => settled) } : {}),
+        ...(questions ? { ask: questions.ask } : {}),
+      });
+    } finally {
+      await questions?.drained();
+    }
+  };
   try {
-    return await tool.execute(checked.value, {
-      ...context,
-      ...(progress ? { progress: quietAfter(progress, () => settled) } : {}),
-      ...(questions ? { ask: questions.ask } : {}),
-    });
+    return await untilAborted(call, signal);
   } finally {
-    await questions?.drained();
     settled = true;
   }
+}
+
+/**
+ * Runs the call, but a cancelled read lets go at once. Its late answer or failure goes nowhere.
+ *
+ * @param start - Starts the call.
+ * @param signal - The read's abort signal, absent for any other effect.
+ * @returns {Promise<ToolResult>} The call's result.
+ */
+async function untilAborted(
+  start: () => ToolResult | Promise<ToolResult>,
+  signal: AbortSignal | undefined,
+): Promise<ToolResult> {
+  if (!signal) return await start();
+  return await new Promise((resolve, reject) => {
+    const abort = (): void => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    void Promise.try(start)
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort));
+  });
 }
 
 /**
