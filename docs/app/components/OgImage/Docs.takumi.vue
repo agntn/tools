@@ -14,7 +14,7 @@ const { title, description, headline } = defineProps<{
 
 const { name: siteName } = useSiteConfig();
 
-/** Docus puts the description in the file name, commas come through stripped, so no commas there. */
+/** The card has room for 160 characters of description, and a longer one gets cut there. */
 const subtitle = (description ?? "").slice(0, 160);
 const chips = HOSTS.map((host) => host.short);
 

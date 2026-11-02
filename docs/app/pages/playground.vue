@@ -7,7 +7,7 @@ definePageMeta({ layout: "default" });
 const title = "Playground";
 const description =
   "Send one text_slug call to a real MCP server, the Pi and OMP adapters and the AI SDK tool at once. In the browser, with the adapters themselves.";
-/** The OG pipeline drops commas from its props, so the card gets a version written without them. */
+/** The card cuts at 160 characters, so it gets a short take, not a sentence chopped mid-word. */
 const cardDescription = "One call sent to MCP and Pi and OMP and the AI SDK at once. In the browser";
 
 useSeo({
@@ -16,6 +16,12 @@ useSeo({
   type: "article",
   breadcrumbs: [{ title: "Playground", path: "/playground" }],
 });
+
+/** `useSeo` points agents at `/playground.md`, a twin this page doesn't have, so the link goes. */
+const dropMarkdownTwin = injectHead().hooks?.hook("tags:resolve", (ctx) => {
+  ctx.tags = ctx.tags.filter((tag) => !(tag.tag === "link" && tag.props.type === "text/markdown"));
+});
+onScopeDispose(() => dropMarkdownTwin?.());
 
 defineOgImage(
   "Docs.takumi",
