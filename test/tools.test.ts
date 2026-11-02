@@ -618,6 +618,17 @@ describe("MCP adapter", () => {
     });
   });
 
+  it("calls a tool that starts processes destructive", async () => {
+    const client = await mcpClient([{ ...echo, effect: "exec" }]);
+    const [tool] = (await client.listTools()).tools;
+
+    expect(tool?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+    });
+  });
+
   it("hands the client the title, description, icons and website from the server info", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createMcpServer(
@@ -1227,6 +1238,43 @@ describe("OMP adapter", () => {
 
   it("keeps optional fields optional on OpenAI models", () => {
     expect(register().map((tool) => tool.strict)).toEqual([false, false, false]);
+  });
+
+  it("asks for the approval tier each effect needs and draws it on the badge", () => {
+    const registered: OmpToolDefinition[] = [];
+    const pi = {
+      typebox: { Type: { Unsafe: (document: unknown) => document } },
+      registerTool: (definition: OmpToolDefinition) => registered.push(definition),
+    };
+    class Text {
+      readonly text: string;
+      constructor(text: string) {
+        this.text = text;
+      }
+    }
+    const effects = ["read", "write", "destructive", "exec"] as const;
+    registerOmpTools(
+      pi as unknown as ExtensionAPI,
+      effects.map((effect) => ({ ...echo, name: `demo_${effect}`, effect })),
+      { Text: Text as unknown as OmpToolOptions["Text"] },
+    );
+    const theme = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+      styledSymbol: (name: string) => `[${name}]`,
+      format: { bracketLeft: "[", bracketRight: "]" },
+    };
+    const badges = registered.map((tool) => {
+      const line = tool.renderResult?.(
+        { content: [{ type: "text", text: "done" }], details: {} },
+        { expanded: false, isPartial: false },
+        theme as never,
+        {},
+      ) as unknown as Text;
+      return /\[(?<tier>\w+)\]<\/accent>$/u.exec(line.text)?.groups?.tier;
+    });
+
+    expect(registered.map((tool) => tool.approval)).toEqual(["read", "write", "write", "exec"]);
+    expect(badges).toEqual(["read", "write", "write", "exec"]);
   });
 
   /* The registered `demo_slow`. */

@@ -51,8 +51,9 @@ export interface ToolResult<Details = unknown> {
  * - `read` changes nothing.
  * - `write` changes state that the next call can undo or overwrite.
  * - `destructive` deletes or overwrites what cannot be recovered.
+ * - `exec` starts processes or runs code, which can then do anything at all.
  */
-export type ToolEffect = "read" | "write" | "destructive";
+export type ToolEffect = "read" | "write" | "destructive" | "exec";
 
 /**
  * How a tool reads on the command line. Without hints the command is the tool

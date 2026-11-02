@@ -17,7 +17,7 @@ const { views, answers, cases, paused, hostIndex, caseIndex, step } = useLanding
       link="Defining tools"
       :checks="[
         'Type comes from @agntn/tools, never from a bare typebox import',
-        'effect: read, write or destructive. MCP hints and OMP approval follow from it',
+        'effect: read, write, destructive or exec. MCP hints and OMP approval follow',
         'A literal union is refused at defineTool. Use Type.Enum, it errors in plain words',
       ]"
     >

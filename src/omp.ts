@@ -58,11 +58,12 @@ export interface OmpToolOptions {
   readonly renderers?: Readonly<Record<string, OmpRenderers>>;
 }
 
-const APPROVAL: Record<ToolEffect, "read" | "write"> = {
+/** OMP has no destructive tier, and `exec` stays for tools that really start processes. */
+const APPROVAL: Record<ToolEffect, "read" | "write" | "exec"> = {
   read: "read",
   write: "write",
-  // OMP has no destructive tier; `exec` means running commands.
   destructive: "write",
+  exec: "exec",
 };
 
 /**
