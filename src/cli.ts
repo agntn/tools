@@ -1297,6 +1297,8 @@ function toolCommand(tool: ToolDefinition): Command {
 }
 
 /**
+ * Uses `serveStdio`: a plain `connect` never answers a 2026 `server/discover`.
+ *
  * @param options - CLI options.
  * @returns {Command} The stdio MCP server command.
  */
@@ -1308,12 +1310,12 @@ function mcpCommand(options: CliOptions): Command {
     fields: [],
     json: false,
     async run() {
-      const [{ createMcpServer }, { StdioServerTransport }] = await Promise.all([
+      const [{ createMcpServer }, { serveStdio }] = await Promise.all([
         import("./mcp.ts"),
         import("@modelcontextprotocol/server/stdio"),
       ]);
       const info = typeof options.mcp === "object" ? options.mcp : options;
-      await createMcpServer(info, options.tools).connect(new StdioServerTransport());
+      serveStdio(() => createMcpServer(info, options.tools));
     },
   };
 }

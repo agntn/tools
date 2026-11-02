@@ -1271,7 +1271,10 @@ describe("CLI process", () => {
   });
 
   it("serves the same tools over MCP with the mcp command", async () => {
-    const client = new Client({ name: "test", version: "0" });
+    const client = new Client(
+      { name: "test", version: "0" },
+      { versionNegotiation: { mode: "legacy" } },
+    );
     await client.connect(
       new StdioClientTransport({ command: process.execPath, args: [fixture, "mcp"] }),
     );
@@ -1288,6 +1291,30 @@ describe("CLI process", () => {
         version: "1.2.3",
         description: "Demo tools",
       });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("lets a 2026 client listen on mcp and promises nothing it can't send", async () => {
+    const client = new Client(
+      { name: "test", version: "0" },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    );
+    await client.connect(
+      new StdioClientTransport({ command: process.execPath, args: [fixture, "mcp"] }),
+    );
+    try {
+      const subscription = await client.listen({
+        toolsListChanged: true,
+        resourceSubscriptions: ["file:///x"],
+      });
+      expect(subscription.honoredFilter).toEqual({});
+      expect((await client.listTools()).tools.map((each) => each.name)).toEqual([
+        "demo_echo",
+        "demo_text_measure",
+      ]);
+      await subscription.close();
     } finally {
       await client.close();
     }
