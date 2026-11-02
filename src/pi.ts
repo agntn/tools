@@ -28,6 +28,9 @@ import { hostContext } from "./updates.ts";
 
 type Component = ReturnType<NonNullable<PiToolDefinition["renderCall"]>>;
 
+/** Pi types the hook's result as the schema's shape, though it only ever feeds the validator. */
+type PiPrepareHook = NonNullable<PiToolDefinition<ToolDefinition["input"]>["prepareArguments"]>;
+
 /** The `Text` component of `@earendil-works/pi-tui`, which Pi resolves for every extension. */
 export type PiTextComponent = new (text: string, paddingX: number, paddingY: number) => Component;
 
@@ -47,7 +50,12 @@ export interface PiToolOptions {
   readonly renderers?: Readonly<Record<string, PiRenderers>>;
   /** Questions to ask before a call runs, by tool name. A name off the tool list throws. */
   readonly confirm?: Readonly<Record<string, PiConfirm>>;
+  /** Pi's argument repair by tool name, run before validation. A name off the list throws. */
+  readonly prepareArguments?: Readonly<Record<string, PiPrepareArguments>>;
 }
+
+/** Repairs raw model input before validation. Hand back what it doesn't recognise untouched. */
+export type PiPrepareArguments = (args: unknown) => unknown;
 
 /** Builds the question for one call from its validated input; `undefined` skips it. */
 export type PiConfirm = (
@@ -73,29 +81,27 @@ export interface PiRenderers extends Readonly<
  *
  * @param pi - Pi extension API.
  * @param tools - Tools to register.
- * @param options - Failure policy, host `Text`, renderers and questions.
+ * @param options - Failure policy, host `Text`, renderers, questions and argument repairs.
  * @throws {ToolDefinitionError} When two tools share a name, a tool has `describeCall` but no
- *   `Text` came with it, or `confirm` names a tool that isn't in the list.
+ *   `Text` came with it, or `confirm` or `prepareArguments` names a tool that isn't in the list.
  */
 export function registerPiTools(
   pi: ExtensionAPI,
   tools: readonly ToolDefinition[],
   options: PiToolOptions = {},
 ): void {
-  const listed = indexTools(tools);
+  const names = [...indexTools(tools).keys()];
   const failures = options.failures ?? "throw";
-  const stray = Object.keys(options.confirm ?? {}).find((name) => !listed.has(name));
-  if (stray !== undefined) {
-    throw new ToolDefinitionError(
-      `confirm names ${JSON.stringify(stray)}, which isn't in the tool list`,
-    );
-  }
+  refuseStray(names, "confirm", options.confirm);
+  refuseStray(names, "prepareArguments", options.prepareArguments);
 
   for (const tool of tools) {
     const renderers = byName(options.renderers, tool.name);
     const ask = byName(options.confirm, tool.name);
+    const prepare = byName(options.prepareArguments, tool.name);
     pi.registerTool({
       ...hostRenderers(tool, renderers, options.Text),
+      ...(prepare === undefined ? {} : { prepareArguments: prepare as PiPrepareHook }),
       name: tool.name,
       label: tool.title,
       description: tool.description,
@@ -110,6 +116,26 @@ export function registerPiTools(
       },
     });
   }
+}
+
+/**
+ * Throws when an option names an unregistered tool, since a typo would drop its entry silently.
+ *
+ * @param names - Names of the registered tools.
+ * @param option - Option name, for the message.
+ * @param entries - Option keyed by tool name.
+ * @throws {ToolDefinitionError} On the first name off the tool list.
+ */
+function refuseStray(
+  names: readonly string[],
+  option: string,
+  entries: Readonly<Record<string, unknown>> | undefined,
+): void {
+  const stray = Object.keys(entries ?? {}).find((name) => !names.includes(name));
+  if (stray === undefined) return;
+  throw new ToolDefinitionError(
+    `${option} names ${JSON.stringify(stray)}, which isn't in the tool list`,
+  );
 }
 
 /**
