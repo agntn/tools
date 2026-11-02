@@ -43,6 +43,7 @@ export interface McpServerInfo {
 
 /**
  * Maps a tool's title and declared effect to MCP annotations. Claude Code reads its label here.
+ * A process the tool starts can delete anything, so `exec` counts as destructive.
  *
  * @param tool - Tool to describe.
  * @returns {ToolAnnotations} Title and hints for the MCP client.
@@ -51,7 +52,7 @@ export function toolAnnotations(tool: ToolDefinition): ToolAnnotations {
   return {
     title: tool.title,
     readOnlyHint: tool.effect === "read",
-    destructiveHint: tool.effect === "destructive",
+    destructiveHint: tool.effect === "destructive" || tool.effect === "exec",
     idempotentHint: tool.idempotent ?? tool.effect === "read",
     openWorldHint: tool.openWorld ?? false,
   };
