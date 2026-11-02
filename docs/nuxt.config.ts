@@ -4,7 +4,7 @@ import { toolsTheme } from "./shiki-theme";
 /** Bundled from the checkout's sources: a deploy needs neither dist/ nor the root node_modules. */
 const librarySource = resolve(import.meta.dirname, "../src");
 
-/** The npm packages the library's core and adapters import; each is a dependency here too. */
+/** Packages the aliased sources import; each also goes in package.json and `optimizeDeps`. */
 const LIBRARY_DEPENDENCIES = [
   "typebox",
   "@modelcontextprotocol/server",
@@ -135,6 +135,7 @@ export default defineNuxtConfig({
   },
   app: {
     head: {
+      /** favicon.svg is the source; the PNGs and favicon.ico are cut from it with ImageMagick. */
       link: [
         { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
         { rel: "apple-touch-icon", sizes: "180x180", href: "/apple-touch-icon.png" },

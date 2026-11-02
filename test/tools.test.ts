@@ -369,6 +369,25 @@ describe("validateInput", () => {
   });
 });
 
+/* What the files the docs site aliases import at runtime, following `./` between them. */
+function docsImports(): Set<string> {
+  const queue = ["index.ts", "mcp.ts", "pi.ts", "omp.ts", "ai.ts"];
+  const seen = new Set<string>();
+  const specifiers = new Set<string>();
+  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+    for (const [, specifier = ""] of source.matchAll(
+      /^(?:import|export)(?! type)[^;]*?from "([^"]+)"/gm,
+    )) {
+      if (specifier.startsWith("./")) queue.push(specifier.slice(2));
+      else specifiers.add(specifier);
+    }
+  }
+  return specifiers;
+}
+
 describe("portability", () => {
   it.each([
     "index.ts",
@@ -388,6 +407,20 @@ describe("portability", () => {
     const source = readFileSync(new URL("../src/toolkit.ts", import.meta.url), "utf8");
     expect(source).not.toMatch(/@modelcontextprotocol/);
     expect(source).not.toMatch(/\btype \w+[^;]*from "\.\/mcp-answers/);
+  });
+
+  it("lists every package src/ loads into the docs site where Workers Builds installs it", () => {
+    const config = readFileSync(new URL("../docs/nuxt.config.ts", import.meta.url), "utf8");
+    const manifest = readFileSync(new URL("../docs/package.json", import.meta.url), "utf8");
+    const { dependencies } = JSON.parse(manifest) as { dependencies: Record<string, string> };
+    const specifiers = [...docsImports()];
+    expect(specifiers).toContain("typebox/value");
+    for (const specifier of specifiers) {
+      const name = specifier.split("/", specifier.startsWith("@") ? 2 : 1).join("/");
+      expect(Object.hasOwn(dependencies, name), `${name} in docs/package.json`).toBe(true);
+      expect(config, `${name} in resolve.dedupe`).toContain(`"${name}"`);
+      expect(config, `${specifier} in optimizeDeps.include`).toContain(`"${specifier}"`);
+    }
   });
 });
 

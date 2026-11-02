@@ -1,3 +1,8 @@
+/**
+ * Every panel shows what the real adapters hand their hosts and answer, run in the page. No server
+ * API and no network request: the Pi and OMP hosts are doubles, the MCP transport is in memory.
+ */
+
 import { validateInput, type ToolDefinition } from "@agntn/tools";
 import { registerOmpTools } from "@agntn/tools/omp";
 import { registerPiTools } from "@agntn/tools/pi";

@@ -7,6 +7,7 @@ import { defineConfig } from "vite-plus";
  * bundles TypeBox into `dist/_chunks/libs/typebox.mjs`.
  */
 export default defineConfig({
+  /** changelogen owns `/CHANGELOG.md`: an autofix push over it races the tag's publish run. */
   fmt: { ...oxfmt, ignorePatterns: ["dist", "docs", "/CHANGELOG.md"] },
   lint: {
     ...oxlint,
@@ -47,6 +48,7 @@ export default defineConfig({
         },
       ],
     },
+    /** `test/copies` reads `dist/` declarations: `typecheck:dist` checks it after the build. */
     ignorePatterns: ["dist", "docs", "test/copies"],
   },
   test: {

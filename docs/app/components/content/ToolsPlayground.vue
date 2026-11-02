@@ -13,6 +13,7 @@ const PRESETS = [
 const route = useRoute();
 const router = useRouter();
 
+/** Only `JSON.parse` reads what the visitor types; it renders as text, never through `v-html`. */
 const source = ref(JSON.stringify(PRESETS[0]!.args, null, 2));
 const parsed = computed<{ ok: true; value: unknown } | { ok: false; message: string }>(() => {
   try {

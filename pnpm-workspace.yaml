@@ -8,6 +8,7 @@ allowBuilds:
   sharp: false
 
 minimumReleaseAgeExclude:
+  # Our own packages: a clean install would refuse a sibling released a few hours ago.
   - "@agntn/*"
   - "@oh-my-pi/hashline@18.0.0"
   - "@oh-my-pi/omp-stats@18.0.0"
@@ -51,5 +52,7 @@ peerDependencyRules:
   allowedVersions:
     vite: "*"
 
+# 0.28.6 breaks three TypeBox shapes in the bundled types (one is sxzz/rolldown-plugin-dts#307).
+# Drop or move the patch only once upstream fixes all three; `pnpm typecheck:dist` shows them.
 patchedDependencies:
   rolldown-plugin-dts@0.28.6: patches/rolldown-plugin-dts@0.28.6.patch
