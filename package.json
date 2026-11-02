@@ -54,13 +54,13 @@
   },
   "scripts": {
     "build": "obuild",
+    "prepack": "obuild",
     "lint": "vp lint && vp fmt --check",
     "lint:fix": "vp lint --fix && vp fmt",
     "typecheck": "tsc --noEmit --skipLibCheck",
     "typecheck:dist": "tsc -p tsconfig.dist.json && tsc -p test/copies",
     "test": "vp test run",
-    "test:watch": "vp test watch",
-    "release": "pnpm test && pnpm build && pnpm typecheck:dist && changelogen --release --push"
+    "test:watch": "vp test watch"
   },
   "devDependencies": {
     "@agntn/ox": "catalog:dev",
@@ -71,7 +71,6 @@
     "@oh-my-pi/pi-coding-agent": "catalog:dev",
     "@types/node": "catalog:dev",
     "ai": "catalog:deps",
-    "changelogen": "catalog:dev",
     "h3": "catalog:dev",
     "h3-mcp": "catalog:dev",
     "obuild": "catalog:dev",
