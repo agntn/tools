@@ -1,5 +1,9 @@
 import { defineBuildConfig } from "obuild/config";
 
+/**
+ * TypeBox stays a devDependency so it lands in the bundle: OMP's loader walks every module it
+ * imports, and its 688 cost 200 ms per start against 20 ms for one chunk.
+ */
 export default defineBuildConfig({
   entries: [
     {
@@ -14,6 +18,7 @@ export default defineBuildConfig({
         "./src/ai.ts",
         "./src/cli.ts",
       ],
+      /** No maps: obuild strips comments after mapping, so every map pointed at the wrong line. */
       dts: { sourcemap: false },
     },
   ],
