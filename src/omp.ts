@@ -73,6 +73,9 @@ const APPROVAL: Record<ToolEffect, "read" | "write"> = {
  * document verbatim, so `pattern` and `maxProperties` survive. A standalone
  * omptype schema would drop both.
  *
+ * Every tool says `strict: false`. OMP's OpenAI strict mode makes each optional field required
+ * and nullable, so the model fills them all with junk, and the core refuses even the `null`.
+ *
  * @param pi - OMP extension API.
  * @param tools - Tools to register.
  * @param options - Host `Text`, optional load mode and renderers.
@@ -99,6 +102,7 @@ export function registerOmpTools(
       parameters: Type.Unsafe<Record<string, unknown>>(wireSchema(tool)),
       approval: APPROVAL[tool.effect],
       loadMode: options.loadMode,
+      strict: false,
       async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<unknown>> {
         // Returned as is: OMP reads `isError` from the object (`explicitError`).
         return await invokeTool(tool, params, hostContext(signal, onUpdate, ctx));
