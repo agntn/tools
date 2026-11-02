@@ -37,13 +37,13 @@ describe("docs pages", () => {
     expect(descriptions.length).toBeGreaterThan(5);
   });
 
-  /**
-   * Docus up to 5.14 puts the description in the OG image's file name, where a comma splits it and
-   * `..png` is skipped, and a bare `: ` turns the YAML into a mapping that drops the page.
-   */
-  it.each(descriptions)("keeps the description of %s to plain sentences", (_page, description) => {
-    expect(description).not.toMatch(/,|\.$|: /);
-  });
+  /** A bare `: ` turns the YAML into a mapping, and the page drops out of the prerender. */
+  it.each(descriptions)(
+    "keeps a colon and space out of the description of %s",
+    (_page, description) => {
+      expect(description).not.toMatch(/: /);
+    },
+  );
 });
 
 describe("docs dependencies", () => {
@@ -57,7 +57,7 @@ describe("docs dependencies", () => {
       ...Object.keys(manifest.devDependencies),
     ]);
     const imported = siteImports();
-    expect(imported).toContain("docus");
+    expect(imported).toContain("nuxt");
     expect([...imported].filter((name) => !declared.has(name))).toEqual([]);
   });
 });

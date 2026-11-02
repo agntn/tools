@@ -41,8 +41,16 @@ export default defineNuxtConfig({
     url: "https://tools.agntn.dev",
     name: "@agntn/tools",
   },
+  /** The playground has no markdown twin, so agents get the page itself, not a `/raw` 404. */
+  agentDiscovery: {
+    excludePrefixes: { extend: ["/playground"] },
+  },
+  /** Docus lists `content/` only and leaves app routes out, so the Vue pages come from here. */
+  sitemap: {
+    sources: ["/api/__sitemap__/pages"],
+  },
+  /** Spelled out, or agent discovery lumps the guide and the hosts into one `Docs` list. */
   llms: {
-    domain: "https://tools.agntn.dev",
     title: "@agntn/tools",
     description:
       "One tool definition served to MCP, Pi, OMP and the AI SDK. TypeBox schema, validation on every surface, errors that stay on one line.",
@@ -70,6 +78,16 @@ export default defineNuxtConfig({
               "A real MCP server, the Pi and OMP adapters and the AI SDK tool, all running in the page.",
           },
         ],
+      },
+      {
+        title: "Guide",
+        contentCollection: "docs",
+        contentFilters: [{ field: "path", operator: "LIKE", value: "/guide%" }],
+      },
+      {
+        title: "Hosts",
+        contentCollection: "docs",
+        contentFilters: [{ field: "path", operator: "LIKE", value: "/hosts%" }],
       },
     ],
   },
@@ -155,14 +173,15 @@ export default defineNuxtConfig({
     },
     compatibilityDate: "2026-09-03",
     esbuild: { options: { target: "es2024" } },
-    prerender: {
-      crawlLinks: true,
-      routes: ["/", "/playground", "/sitemap.xml", "/robots.txt", "/llms.txt", "/llms-full.txt"],
-    },
     cloudflare: {
       deployConfig: true,
       nodeCompat: true,
     },
+  },
+  /** Nuxt's own prerender option. The same keys under `nitro.prerender` are deprecated. */
+  prerender: {
+    crawlLinks: true,
+    routes: ["/", "/playground", "/sitemap.xml", "/robots.txt", "/llms.txt", "/llms-full.txt"],
   },
   compatibilityDate: "2026-09-03",
   /** Fonts live in public/fonts and app/assets/fonts.css, where nuxt-og-image reads them from. */
