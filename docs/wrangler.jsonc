@@ -2,8 +2,9 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   /*
    * Workers Builds deploys this from `docs/` on every push to main (`pnpm run build`,
-   * then `npx wrangler deploy`) and installs nothing outside it. Node comes from the root
-   * `.node-version`, since Workers Builds never reads `engines`. Both D1 databases are EU only.
+   * then `npx wrangler deploy`), and pnpm there installs the whole workspace from the root
+   * lockfile. Node comes from the root `.node-version`, since Workers Builds never reads
+   * `engines`. Both D1 databases are EU only.
    */
   "name": "agntn-tools",
   "account_id": "6ef8d3cbe19975e93d994f25228488e7",

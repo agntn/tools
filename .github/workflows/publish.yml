@@ -20,6 +20,10 @@ jobs:
         with:
           node-version: v26.10.0
           registry-url: https://registry.npmjs.org
+          # The package alone: docs/ joins the workspace, but nothing here builds the site.
+          run-install: |
+            - cwd: .
+              args: ['--frozen-lockfile', '--filter', '@agntn/tools']
       - run: pnpm build
       - run: pnpm typecheck:dist
       - run: pnpm test

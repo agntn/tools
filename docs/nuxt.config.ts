@@ -1,10 +1,10 @@
 import { resolve } from "node:path";
 import { toolsTheme } from "./shiki-theme";
 
-/** Bundled from the checkout's sources: a deploy needs neither dist/ nor the root node_modules. */
+/** Bundled from the checkout's sources: no dist/ needed, bare imports resolve from the root. */
 const librarySource = resolve(import.meta.dirname, "../src");
 
-/** Packages the aliased sources import; each also goes in package.json and `optimizeDeps`. */
+/** Packages the aliased sources import; each also goes in `optimizeDeps`. */
 const LIBRARY_DEPENDENCIES = [
   "typebox",
   "@modelcontextprotocol/server",
@@ -14,8 +14,6 @@ const LIBRARY_DEPENDENCIES = [
 
 export default defineNuxtConfig({
   extends: ["docus"],
-  /** The repo root is its own pnpm workspace; Nuxt must not treat it as this site's. */
-  workspaceDir: import.meta.dirname,
   alias: {
     "@agntn/tools/mcp": resolve(librarySource, "mcp.ts"),
     "@agntn/tools/pi": resolve(librarySource, "pi.ts"),
@@ -35,10 +33,6 @@ export default defineNuxtConfig({
         "@modelcontextprotocol/client",
         "ai",
       ],
-    },
-    server: {
-      /** Dev serves the library from outside the workspace, which Vite refuses without this. */
-      fs: { allow: [librarySource] },
     },
   },
   devtools: { enabled: false },
@@ -154,7 +148,7 @@ export default defineNuxtConfig({
     preset: "cloudflare_module",
     /**
      * One MCP SDK in the worker. The Docus toolkit builds its server from one copy and `agents` checks it
-     * with `instanceof` against another. pnpm splits them by the `@cfworker/json-schema` peer.
+     * with `instanceof` against another. pnpm can split them by the peers each copy resolves.
      */
     alias: {
       "@modelcontextprotocol/sdk": resolve(import.meta.dirname, "node_modules/@modelcontextprotocol/sdk/dist/esm"),
