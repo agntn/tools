@@ -1595,6 +1595,78 @@ describe("Pi adapter", () => {
       new ToolDefinitionError('confirm names "demo_ecko", which isn\'t in the tool list'),
     );
   });
+
+  /* Takes one id or a list, like harnesses_info, and says which one it got. */
+  const lookup = defineTool({
+    name: "demo_lookup",
+    title: "Demo Lookup",
+    description: "Look up one id or several.",
+    effect: "read",
+    input: Type.Object(
+      { id: Type.Union([Type.String(), Type.Array(Type.String())]) },
+      { additionalProperties: false },
+    ),
+    execute: ({ id }): ToolResult<null> => ({
+      content: [{ type: "text", text: Array.isArray(id) ? `list ${id.join(",")}` : `one ${id}` }],
+      details: null,
+    }),
+  });
+
+  /* Turns an `id` holding a JSON array of strings into that array and leaves the rest alone. */
+  function listFromText(args: unknown): unknown {
+    if (typeof args !== "object" || args === null || !("id" in args)) return args;
+    if (typeof args.id !== "string" || !args.id.startsWith("[")) return args;
+    try {
+      const parsed: unknown = JSON.parse(args.id);
+      const strings = Array.isArray(parsed) && parsed.every((item) => typeof item === "string");
+      return strings ? { ...args, id: parsed } : args;
+    } catch {
+      return args;
+    }
+  }
+
+  it("hands Pi a prepareArguments that turns a list sent as text back into a list", async () => {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [lookup, echo], {
+      prepareArguments: { demo_lookup: listFromText },
+    });
+    const [tool, other] = registered;
+    if (!tool?.prepareArguments) throw new Error("no prepareArguments on demo_lookup");
+    const { prepareArguments } = tool;
+
+    /* What Pi does with a call: prepare the raw arguments, then execute with the result. */
+    const run = async (raw: unknown): Promise<unknown> =>
+      (await tool.execute("call-1", prepareArguments(raw), undefined, undefined, {} as never))
+        .content;
+
+    expect(await run({ id: '["grok","claude","opencode"]' })).toEqual([
+      { type: "text", text: "list grok,claude,opencode" },
+    ]);
+    expect(await run({ id: "grok" })).toEqual([{ type: "text", text: "one grok" }]);
+    expect(await run({ id: '["grok",1]' })).toEqual([{ type: "text", text: 'one ["grok",1]' }]);
+    expect(other).not.toHaveProperty("prepareArguments");
+  });
+
+  it("still validates what prepareArguments hands back", async () => {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [lookup], {
+      prepareArguments: { demo_lookup: () => ({ id: 7 }) },
+    });
+    const [tool] = registered;
+    if (!tool?.prepareArguments) throw new Error("no prepareArguments on demo_lookup");
+    const prepared = tool.prepareArguments({ id: "grok" });
+    await expect(
+      tool.execute("call-1", prepared, undefined, undefined, {} as never),
+    ).rejects.toThrow("Invalid arguments at /id");
+  });
+
+  it("refuses a prepareArguments for a tool that isn't in the list", () => {
+    expect(() => register({ prepareArguments: { demo_ecko: (args) => args } })).toThrow(
+      new ToolDefinitionError('prepareArguments names "demo_ecko", which isn\'t in the tool list'),
+    );
+  });
 });
 
 let passes = 0;
