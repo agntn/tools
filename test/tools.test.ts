@@ -1225,6 +1225,10 @@ describe("OMP adapter", () => {
     ]);
   });
 
+  it("keeps optional fields optional on OpenAI models", () => {
+    expect(register().map((tool) => tool.strict)).toEqual([false, false, false]);
+  });
+
   /* The registered `demo_slow`. */
   function slowTool(): OmpToolDefinition {
     const tool = register().find((definition) => definition.name === "demo_slow");
