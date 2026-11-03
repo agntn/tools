@@ -278,6 +278,51 @@ describe("CLI commands", () => {
     }
   });
 
+  it("names the bound a number in a union or an intersection missed", async () => {
+    const versions = defineTool({
+      name: "demo_versions",
+      title: "Versions",
+      description: "Lists versions.",
+      effect: "read",
+      input: Type.Object(
+        {
+          limit: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Enum(["all"])])),
+          plain: Type.Optional(Type.Integer({ minimum: 1 })),
+          floor: Type.Optional(Type.Intersect([Type.Integer(), Type.Number({ minimum: 1 })])),
+        },
+        { additionalProperties: false },
+      ),
+      execute: (input) => ({
+        content: [{ type: "text", text: JSON.stringify(input) }],
+        details: null,
+      }),
+    });
+    const cli = { ...options, tools: [versions], default: undefined, fallback: undefined };
+    const listed = async (...argv: readonly string[]) => run(["versions", ...argv], cli);
+
+    for (const limit of ["0", "-1"]) {
+      expect((await listed("--limit", limit)).stderr).toBe(
+        [
+          "Invalid arguments at --limit: must be >= 1",
+          "Invalid arguments at --limit: must be one of all",
+          "Invalid arguments at --limit: must match a schema in anyOf",
+          "",
+        ].join("\n"),
+      );
+    }
+    expect((await listed("--plain", "0")).stderr).toBe(
+      "Invalid arguments at --plain: must be >= 1\n",
+    );
+    expect((await listed("--floor", "0")).stderr).toBe(
+      "Invalid arguments at --floor: must be >= 1\n",
+    );
+    expect((await listed("--limit", "1.5")).stderr).toContain(
+      "Invalid arguments at --limit: must be integer\n",
+    );
+    expect((await listed("--limit", "3", "--floor", "2")).stdout).toBe('{"limit":3,"floor":2}\n');
+    expect((await listed("--limit", "all")).stdout).toBe('{"limit":"all"}\n');
+  });
+
   it("fails with the core's validation lines, placed by the words of the line", async () => {
     expect(await run(["echo", "a.b", "--times", "9"])).toEqual({
       stdout: "",

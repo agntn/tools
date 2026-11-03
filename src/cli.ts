@@ -919,22 +919,22 @@ function unionBranches(schema: SchemaNode): readonly SchemaNode[] {
 }
 
 /**
- * The first reading of the word the schema accepts: the text itself, then what each branch spells.
+ * The first reading the schema accepts: the text, then what each branch spells. When none
+ * passes, a number some branch read beats the text, so `--limit 0` hears about its bound.
  *
  * @param schema - Property schema, a union or not.
  * @param word - The word.
- * @returns {unknown} The value, or the word for validation to judge.
+ * @returns {unknown} The value, or what validation should judge: that number, else the word.
  */
 function wordValue(schema: SchemaNode, word: string): unknown {
-  const readings = [
-    word,
-    ...unionBranches(schema).flatMap((branch) => {
-      const read = branchValue(branch, word);
-      return read === undefined ? [] : [read.value];
-    }),
-  ];
+  const spelled = unionBranches(schema).flatMap((branch) => {
+    const read = branchValue(branch, word);
+    return read === undefined ? [] : [read.value];
+  });
+  const readings = [word, ...spelled];
   const index = readings.findIndex((value) => Value.Check(schema, value));
-  return index === -1 ? word : readings[index];
+  if (index !== -1) return readings[index];
+  return spelled.find((value) => typeof value === "number") ?? word;
 }
 
 /**
