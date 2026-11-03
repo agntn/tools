@@ -818,6 +818,58 @@ describe("CLI short flags and rest", () => {
     expect(stdout).toContain("  -x, --[no-]exact");
   });
 
+  it("lists a long enum after its description instead of widening every row", async () => {
+    const archives = ["auto", "all", "wayback", "arquivo", "webarchiv", "conifer", "memento"];
+    const snapshots = defineTool({
+      name: "demo_snapshots",
+      title: "Snapshots",
+      description: "List captures.",
+      effect: "read",
+      input: Type.Object(
+        {
+          provider: Type.Optional(Type.Enum(archives, { description: "Archive to ask." })),
+          order: Type.Optional(Type.Enum(["newest", "oldest"], { description: "Which end." })),
+          mode: Type.Enum(["strict", "loose", "lenient", "permissive", "relaxed"]),
+          limit: Type.Optional(Type.Integer({ description: "Most captures." })),
+        },
+        { additionalProperties: false },
+      ),
+      cli: { short: { provider: "p" } },
+      execute: (input) => ({ content: [], details: input }),
+    });
+    const { stdout } = await run(["snapshots", "--help"], cli(snapshots));
+    expect(stdout.slice(stdout.indexOf("\nOPTIONS\n") + 1)).toBe(
+      [
+        "OPTIONS",
+        "",
+        "  -p, --provider=<provider>  Archive to ask. (one of auto, all, wayback, arquivo, webarchiv, conifer, memento)",
+        "  --order=<newest|oldest>    Which end.",
+        "  --mode=<mode>              (one of strict, loose, lenient, permissive, relaxed) (required)",
+        "  --limit=<number>           Most captures.",
+        "  --json                     Print the details as JSON instead of the text",
+        "  -h, --help                 Show this help",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps a long enum inline when its flag name would make the cell wider", async () => {
+    const levels = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    const encode = defineTool({
+      name: "demo_encode",
+      title: "Encode",
+      description: "Encode.",
+      effect: "read",
+      input: Type.Object(
+        { outputEncodingScheme: Type.Optional(Type.Enum(levels)) },
+        { additionalProperties: false },
+      ),
+      execute: (input) => ({ content: [], details: input }),
+    });
+    const { stdout } = await run(["encode", "--help"], cli(encode));
+    expect(stdout).toContain("\n  --output-encoding-scheme=<a|b|c|d|e|f|g|h>\n");
+  });
+
   it("joins the rest into a string enum and lets the core check it", async () => {
     const city = defineTool({
       name: "demo_city",
