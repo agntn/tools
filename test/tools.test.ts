@@ -1227,6 +1227,24 @@ describe("mcp-toolkit adapter", () => {
 });
 
 describe("AI SDK adapter", () => {
+  /** Just the PNG signature. Nothing here decodes it, so it passes for a picture. */
+  const PNG = "iVBORw0KGgo=";
+  /** Answers with the caption, when there is one, and a picture. */
+  const picture = defineTool({
+    name: "demo_picture",
+    title: "Picture",
+    description: "x",
+    effect: "read",
+    input: Type.Object({ caption: Type.String() }, { additionalProperties: false }),
+    execute: ({ caption }) => ({
+      content: [
+        ...(caption === "" ? [] : [{ type: "text" as const, text: caption }]),
+        { type: "image", data: PNG, mimeType: "image/png" },
+      ],
+      details: { width: 1 },
+    }),
+  });
+
   it("validates through the shared validator and returns details with the text", async () => {
     const tool = toAiTool(echo);
     if (!tool.execute) throw new Error("tool not executable");
@@ -1324,28 +1342,88 @@ describe("AI SDK adapter", () => {
     });
   });
 
-  it("shows the model the whole output when the tool answers with an image alone", async () => {
-    const picture = defineTool({
-      name: "demo_picture",
-      title: "Picture",
-      description: "x",
-      effect: "read",
-      input: Type.Object({}),
-      execute: () => ({
-        content: [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }],
-        details: { width: 1 },
-      }),
-    });
+  it("shows the model an image the tool answers with alone, not the details as JSON", async () => {
     const tool = toAiTool(picture);
     const options = { toolCallId: "1", messages: [], context: {} };
-    const output = await tool.execute?.({}, options);
+    const output = await tool.execute?.({ caption: "" }, options);
+
+    expect(output).toEqual({ width: 1, text: "", images: [{ data: PNG, mimeType: "image/png" }] });
+    expect(
+      await tool.toModelOutput?.({
+        toolCallId: "1",
+        input: { caption: "" },
+        output: output as never,
+      }),
+    ).toEqual({
+      type: "content",
+      value: [{ type: "file", data: { type: "data", data: PNG }, mediaType: "image/png" }],
+    });
+  });
+
+  it("puts the image in front of the model next to the text", async () => {
+    const usage = {
+      inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 1, text: 1, reasoning: undefined },
+    };
+    const model = new MockLanguageModelV4({
+      doGenerate: [
+        {
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "1",
+              toolName: "demo_picture",
+              input: JSON.stringify({ caption: "a dot" }),
+            },
+          ],
+          finishReason: { unified: "tool-calls", raw: undefined },
+          usage,
+          warnings: [],
+        },
+        {
+          content: [{ type: "text", text: "a dot it is" }],
+          finishReason: { unified: "stop", raw: undefined },
+          usage,
+          warnings: [],
+        },
+      ],
+    });
+
+    await generateText({
+      model,
+      prompt: "draw a dot",
+      tools: toAiTools([picture]),
+      stopWhen: isStepCount(2),
+    });
+
+    expect(model.doGenerateCalls[1]?.prompt.at(-1)).toMatchObject({
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          output: {
+            type: "content",
+            value: [
+              { type: "text", text: "a dot" },
+              { type: "file", data: { type: "data", data: PNG }, mediaType: "image/png" },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("reads a stored output whose images got mangled as the text alone", async () => {
+    const tool = toAiTool(picture);
+    const stored = { width: 1, text: "a dot", images: [{ data: 1 }, null, "x"] };
 
     expect(
-      await tool.toModelOutput?.({ toolCallId: "1", input: {}, output: output as never }),
-    ).toEqual({
-      type: "json",
-      value: { width: 1, text: "" },
-    });
+      await tool.toModelOutput?.({
+        toolCallId: "1",
+        input: { caption: "a dot" },
+        output: stored as never,
+      }),
+    ).toEqual({ type: "text", value: "a dot" });
   });
 
   it("gives the tool no progress callback, since the AI SDK has nowhere to show it", async () => {
@@ -1357,22 +1435,28 @@ describe("AI SDK adapter", () => {
     });
   });
 
-  it("refuses details with a text field instead of overwriting it", async () => {
-    const clash = defineTool({
-      name: "demo_clash",
-      title: "Clash",
-      description: "x",
-      effect: "read",
-      input: Type.Object({}),
-      execute: () => ({ content: [{ type: "text", text: "shown" }], details: { text: "slice" } }),
-    });
-    const tool = toAiTool(clash);
-    if (!tool.execute) throw new Error("tool not executable");
+  it.each(["text", "images"])(
+    "refuses details with their own %s field instead of overwriting it",
+    async (field) => {
+      const clash = defineTool({
+        name: "demo_clash",
+        title: "Clash",
+        description: "x",
+        effect: "read",
+        input: Type.Object({}),
+        execute: () => ({
+          content: [{ type: "text", text: "shown" }],
+          details: { [field]: "slice" },
+        }),
+      });
+      const tool = toAiTool(clash);
+      if (!tool.execute) throw new Error("tool not executable");
 
-    await expect(tool.execute({}, { toolCallId: "1", messages: [], context: {} })).rejects.toThrow(
-      "details must not have a text field",
-    );
-  });
+      await expect(
+        tool.execute({}, { toolCallId: "1", messages: [], context: {} }),
+      ).rejects.toThrow(`details must not have their own ${field} field`);
+    },
+  );
 });
 
 describe("OMP adapter", () => {
