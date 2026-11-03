@@ -135,9 +135,13 @@ export interface ToolCallContext {
   host?: unknown;
 }
 
-export interface ToolDefinition<Input extends TObject = TObject, Details = unknown> {
-  /** Wire name, `<package>_<operation>`. */
-  readonly name: string;
+export interface ToolDefinition<
+  Input extends TObject = TObject,
+  Details = unknown,
+  Name extends string = string,
+> {
+  /** Wire name, `<package>_<operation>`. Kept literal, so `toAiTools` keys its set by it. */
+  readonly name: Name;
   /** Human label: MCP `title` and `annotations.title`, Pi and OMP `label`. */
   readonly title: string;
   /** Complete instruction for the model. MCP clients see nothing else. */
@@ -218,11 +222,13 @@ const TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
  * Declares a tool and checks the schema rules every surface depends on.
  *
  * @param tool - Tool definition.
- * @returns {ToolDefinition<Input, Details>} The same definition, typed.
+ * @returns {ToolDefinition<Input, Details, Name>} The same definition, typed.
  */
-export function defineTool<const Input extends TObject, Details>(
-  tool: ToolDefinition<Input, Details>,
-): ToolDefinition<Input, Details> {
+export function defineTool<
+  const Input extends TObject,
+  Details,
+  const Name extends string = string,
+>(tool: ToolDefinition<Input, Details, Name>): ToolDefinition<Input, Details, Name> {
   if (!TOOL_NAME.test(tool.name)) {
     throw new ToolDefinitionError(`Tool name ${JSON.stringify(tool.name)} must match ${TOOL_NAME}`);
   }
