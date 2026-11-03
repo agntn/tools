@@ -78,6 +78,9 @@ const TEXT_KINDS = new Set<FieldKind>(["string", "enum"]);
 /** A short flag: one letter, so a negative number never reads as one. */
 const SHORT_FLAG = /^[a-z]$/i;
 
+/** Widest option an enum still spells out in `--help`: half an 80 column terminal. */
+const INLINE_ENUM_WIDTH = 40;
+
 type FieldKind = "string" | "number" | "boolean" | "enum" | "json";
 
 interface Field {
@@ -409,12 +412,14 @@ function assertOneOptionPerSpelling(tool: ToolDefinition, fields: readonly Field
 
 /**
  * @param field - Field to describe.
+ * @param values - Enum values to list, when the flag column has no room for them.
  * @returns {string} Its line in the usage text, after the flag.
  */
-function fieldDescription(field: Field): string {
+function fieldDescription(field: Field, values = ""): string {
   const { schema } = field;
   return [
     typeof schema.description === "string" ? schema.description : "",
+    values === "" ? "" : `(one of ${values})`,
     field.stdin ? "(- reads stdin)" : "",
     field.required ? "(required)" : "",
   ]
@@ -433,12 +438,27 @@ function valueHint(field: Field): string {
 
 /**
  * @param field - Option field.
+ * @param hint - What goes between the angle brackets.
  * @returns {string} Its long spelling in the usage text.
  */
-function optionSpelling(field: Field): string {
-  return field.kind === "boolean"
-    ? `--[no-]${field.flag}`
-    : `--${field.flag}=<${valueHint(field)}>`;
+function optionSpelling(field: Field, hint = valueHint(field)): string {
+  return field.kind === "boolean" ? `--[no-]${field.flag}` : `--${field.flag}=<${hint}>`;
+}
+
+/**
+ * Past {@link INLINE_ENUM_WIDTH} an enum goes by its flag name, values after the description.
+ *
+ * @param field - Option field.
+ * @returns {[string, string]} Its row in the options table.
+ */
+function optionRow(field: Field): [string, string] {
+  const short = field.short === undefined ? "" : `-${field.short}, `;
+  const spelling = `${short}${optionSpelling(field)}`;
+  if (field.kind !== "enum" || spelling.length <= INLINE_ENUM_WIDTH) {
+    return [spelling, fieldDescription(field)];
+  }
+  const values = (field.schema.enum as string[]).join(", ");
+  return [`${short}${optionSpelling(field, field.flag)}`, fieldDescription(field, values)];
 }
 
 /**
@@ -1517,10 +1537,7 @@ function commandUsage(options: CliOptions, command: Command): string {
   const takesOptions = flags.length > 0 || command.json;
   const words = positional.map(fieldWord);
   const rows = [
-    ...flags.map((field): [string, string] => [
-      `${field.short === undefined ? "" : `-${field.short}, `}${optionSpelling(field)}`,
-      fieldDescription(field),
-    ]),
+    ...flags.map(optionRow),
     ...(command.json
       ? [["--json", "Print the details as JSON instead of the text"] as [string, string]]
       : []),
