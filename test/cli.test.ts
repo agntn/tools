@@ -468,9 +468,34 @@ describe("CLI commands", () => {
       "Invalid arguments: --times needs a value\n",
     );
     expect((await run(["echo", "hi", "--spaced=yes"])).stderr).toBe(
-      "Invalid arguments: --spaced takes no value\n",
+      "Invalid arguments: --spaced takes no value; use --spaced or --no-spaced\n",
     );
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("names the --no- form when a boolean that defaults to true gets a value", async () => {
+    const lift = defineTool({
+      name: "demo_lift",
+      title: "Lift",
+      description: "x",
+      effect: "read",
+      input: Type.Object(
+        { compressed: Type.Optional(Type.Boolean({ default: true })) },
+        { additionalProperties: false },
+      ),
+      execute: (input) => ({
+        content: [{ type: "text", text: JSON.stringify(input) }],
+        details: null,
+      }),
+    });
+    const cli: CliOptions = { ...options, tools: [lift], default: undefined, fallback: undefined };
+    const execute = vi.spyOn(lift, "execute");
+    const refusal =
+      "Invalid arguments: --compressed takes no value; use --compressed or --no-compressed\n";
+    expect((await run(["lift", "--compressed=false"], cli)).stderr).toBe(refusal);
+    expect((await run(["lift", "--no-compressed=true"], cli)).stderr).toBe(refusal);
+    expect(execute).not.toHaveBeenCalled();
+    expect((await run(["lift", "--no-compressed"], cli)).stdout).toBe('{"compressed":false}\n');
   });
 
   it("takes only the declared kebab spelling of a property", async () => {

@@ -688,18 +688,21 @@ function longField(
   if (name === "help") return "option";
   const field = Object.hasOwn(options, name) ? options[name] : undefined;
   if (field !== undefined) return field === "json" ? "option" : field;
-  return negatesBoolean(name, options) ? "option" : undefined;
+  return negatedField(name, options) === undefined ? undefined : "option";
 }
 
 /**
  * @param name - A long option name without its `--`.
  * @param options - Option fields by flag.
- * @returns {boolean} Whether the name is the `no-` form of a boolean flag.
+ * @returns {Field | undefined} The boolean field the name is the `no-` form of.
  */
-function negatesBoolean(name: string, options: Readonly<Record<string, Field | "json">>): boolean {
+function negatedField(
+  name: string,
+  options: Readonly<Record<string, Field | "json">>,
+): Field | undefined {
   const flag = name.slice(3);
   const field = name.startsWith("no-") && Object.hasOwn(options, flag) ? options[flag] : undefined;
-  return field !== undefined && field !== "json" && field.kind === "boolean";
+  return field !== "json" && field?.kind === "boolean" ? field : undefined;
 }
 
 /**
@@ -777,6 +780,8 @@ function asksHelp(token: OptionToken, word: string): boolean {
 }
 
 /**
+ * `util.parseArgs` negates only a bare `--no-flag`, so `--no-flag=x` keeps its `no-` name.
+ *
  * @param options - Option fields by flag, and `--json` when the command takes it.
  * @param token - The token `util.parseArgs` made.
  * @param word - The command line word it came from.
@@ -788,7 +793,9 @@ function optionField(
   word: string,
 ): Field | "json" | "help" | undefined {
   if (asksHelp(token, word)) return "help";
-  const field = Object.hasOwn(options, token.name) ? options[token.name] : undefined;
+  const field = Object.hasOwn(options, token.name)
+    ? options[token.name]
+    : negatedField(token.name, options);
   if (field === "json") return token.rawName === "--json" ? field : undefined;
   return field !== undefined && spells(field, token, word) ? field : undefined;
 }
@@ -856,7 +863,11 @@ function readOption(
  */
 function optionProblem(field: Field, token: OptionToken, seen: boolean): string | undefined {
   if (seen) return "given more than once";
-  if (field.kind === "boolean") return token.inlineValue === true ? "takes no value" : undefined;
+  if (field.kind === "boolean") {
+    return token.inlineValue === true
+      ? `takes no value; use --${field.flag} or --no-${field.flag}`
+      : undefined;
+  }
   return token.value === undefined ? "needs a value" : undefined;
 }
 
