@@ -446,7 +446,7 @@ function optionSpelling(field: Field, hint = valueHint(field)): string {
 }
 
 /**
- * Past {@link INLINE_ENUM_WIDTH} an enum goes by its flag name, values after the description.
+ * Past {@link INLINE_ENUM_WIDTH} an enum goes by its flag name, when that is narrower.
  *
  * @param field - Option field.
  * @returns {[string, string]} Its row in the options table.
@@ -454,11 +454,15 @@ function optionSpelling(field: Field, hint = valueHint(field)): string {
 function optionRow(field: Field): [string, string] {
   const short = field.short === undefined ? "" : `-${field.short}, `;
   const spelling = `${short}${optionSpelling(field)}`;
-  if (field.kind !== "enum" || spelling.length <= INLINE_ENUM_WIDTH) {
+  const named = `${short}${optionSpelling(field, field.flag)}`;
+  if (
+    field.kind !== "enum" ||
+    spelling.length <= INLINE_ENUM_WIDTH ||
+    named.length >= spelling.length
+  ) {
     return [spelling, fieldDescription(field)];
   }
-  const values = (field.schema.enum as string[]).join(", ");
-  return [`${short}${optionSpelling(field, field.flag)}`, fieldDescription(field, values)];
+  return [named, fieldDescription(field, (field.schema.enum as string[]).join(", "))];
 }
 
 /**

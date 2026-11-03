@@ -853,6 +853,23 @@ describe("CLI short flags and rest", () => {
     );
   });
 
+  it("keeps a long enum inline when its flag name would make the cell wider", async () => {
+    const levels = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    const encode = defineTool({
+      name: "demo_encode",
+      title: "Encode",
+      description: "Encode.",
+      effect: "read",
+      input: Type.Object(
+        { outputEncodingScheme: Type.Optional(Type.Enum(levels)) },
+        { additionalProperties: false },
+      ),
+      execute: (input) => ({ content: [], details: input }),
+    });
+    const { stdout } = await run(["encode", "--help"], cli(encode));
+    expect(stdout).toContain("\n  --output-encoding-scheme=<a|b|c|d|e|f|g|h>\n");
+  });
+
   it("joins the rest into a string enum and lets the core check it", async () => {
     const city = defineTool({
       name: "demo_city",
