@@ -92,14 +92,29 @@ function modelOutput(output: unknown): ModelOutput {
     : { type: "json", value: output as JSONValue };
 }
 
+/** What {@link toAiTools} returns: each tool under its own name, typed like {@link toAiTool}. */
+export type AiTools<Tools extends readonly ToolDefinition[]> = {
+  [Definition in Tools[number] as Definition["name"]]: Definition extends ToolDefinition<
+    infer Input,
+    infer Details
+  >
+    ? Tool<Static<Input>, AiToolOutput<Details>>
+    : never;
+};
+
 /**
- * Builds an AI SDK tool set keyed by tool name.
+ * Builds an AI SDK tool set keyed by tool name, typed per tool.
+ * `Object.fromEntries` only knows a record, so the result is cast to the `AiTools` it built.
  *
  * @param tools - Tools to convert.
- * @returns {Record<string, Tool>} AI SDK tools.
+ * @returns {AiTools<Tools>} AI SDK tools.
  * @throws {ToolDefinitionError} When two tools share a name.
  */
-export function toAiTools(tools: readonly ToolDefinition[]): Record<string, Tool> {
+export function toAiTools<const Tools extends readonly ToolDefinition[]>(
+  tools: Tools,
+): AiTools<Tools> {
   indexTools(tools);
-  return Object.fromEntries(tools.map((definition) => [definition.name, toAiTool(definition)]));
+  return Object.fromEntries(
+    tools.map((definition) => [definition.name, toAiTool(definition)]),
+  ) as AiTools<Tools>;
 }

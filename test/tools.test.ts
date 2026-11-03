@@ -11,7 +11,7 @@ import type {
   ToolDefinition as PiToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ToolDefinition as OmpToolDefinition } from "@oh-my-pi/pi-coding-agent";
-import { asSchema, generateText, isStepCount } from "ai";
+import { asSchema, generateText, isStepCount, type Tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { H3 } from "h3";
 import { defineMcpHandler } from "h3-mcp";
@@ -23,10 +23,10 @@ import {
   ElicitRequestSchema,
   type CallToolResult as SdkV1Result,
 } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, expectTypeOf, it } from "vite-plus/test";
 import type { z } from "zod";
 
-import { toAiTool, toAiTools } from "../src/ai.ts";
+import { toAiTool, toAiTools, type AiToolOutput } from "../src/ai.ts";
 import { ESCAPE_SEQUENCE, stripEscapes } from "../src/escapes.ts";
 import {
   defineTool,
@@ -1238,6 +1238,47 @@ describe("AI SDK adapter", () => {
     expect(await tool.execute({ word: "hi" }, options)).toEqual({ word: "hi", text: "hi" });
     await expect(tool.execute({ word: "fail" }, options)).rejects.toThrow("cannot echo fail");
     expect(Object.keys(toAiTools([echo]))).toEqual(["demo_echo"]);
+  });
+
+  it("keys the tool set by literal names, each tool keeping its types", async () => {
+    const tools = toAiTools([echo]);
+    const options = { toolCallId: "1", messages: [], context: {} };
+
+    expectTypeOf(tools).toEqualTypeOf<{
+      demo_echo: Tool<{ word: string; mode?: "plain" | "loud" }, AiToolOutput<{ word: string }>>;
+    }>();
+    expect(await tools.demo_echo.execute?.({ word: "hi" }, options)).toEqual({
+      word: "hi",
+      text: "hi",
+    });
+    /* @ts-expect-error */
+    expect(tools.demo_ech0).toBeUndefined();
+    /* @ts-expect-error */
+    await expect(tools.demo_echo.execute?.({ word: 42 }, options)).rejects.toThrow();
+  });
+
+  it("keys a list built with map by its name union", () => {
+    const names = ["demo_one", "demo_two"] as const;
+    const built = names.map((name) =>
+      defineTool({
+        name,
+        title: name,
+        description: "x",
+        effect: "read",
+        input: Type.Object({}),
+        execute: () => ({ content: [{ type: "text", text: name }], details: {} }),
+      }),
+    );
+    const tools = toAiTools(built);
+
+    expectTypeOf<keyof typeof tools>().toEqualTypeOf<"demo_one" | "demo_two">();
+    expect(Object.keys(tools)).toEqual(["demo_one", "demo_two"]);
+  });
+
+  it("still takes a plain ToolDefinition list, keyed by string", () => {
+    const plain: readonly ToolDefinition[] = [echo];
+    expectTypeOf(toAiTools(plain)).toExtend<Record<string, Tool>>();
+    expect(Object.keys(toAiTools(plain))).toEqual(["demo_echo"]);
   });
 
   it("hands the model the text alone, not the details a second time", async () => {
