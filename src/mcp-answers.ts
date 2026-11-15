@@ -205,10 +205,9 @@ function boundedLine(text: string): string {
   return `${kept}...`;
 }
 
-/** Where a URL starts: a scheme with slashes, or a web one without. */
-const URL_START = /\b(?:[a-z][a-z\d+.-]*:[/\\]+|(?:https?|wss?|ftp):)/i;
-/** A URL's host, then the whole rest of its token: quotes inside count, closing ones stay. */
-const URL_TAIL = /([a-z][a-z\d+.-]*:[/\\]*)([^\s/\\?#"']+)(\S*?)(?=[:,.;)\]"']*(?:\s|$))/gi;
+/** A URL's scheme, then its host up to where a path, query or userinfo would start. */
+const URL_HOST =
+  /\b((?:[a-z][a-z\d+.-]*:[/\\]+|(?:https?|wss?|ftp):))[^\s/\\?#]*?(?=[:,.;)\]"']*(?:\s|$)|[/\\?#@])/gi;
 /** A field's name and separator, `"apiKey": ` or `x-api-key: ` or `token=`. */
 const FIELD = /(["']?)([a-z][\w-]*)\1(\s*[=:]\s*)(?=\S)/gi;
 const SECRET_NAME = /token|key|secret|pass|auth|sig|session|credential|cookie/i;
@@ -219,27 +218,26 @@ const JSON_QUOTE = /"[^]*"(?:\.\.\.)? is not valid JSON/g;
  * Overcautious on purpose: a cause nobody scrubbed costs a key, a lost path costs a guess.
  *
  * @param text - One line that may quote a URL, a field or a broken JSON input.
- * @returns {string} The line with each URL cut to scheme and host and secret values gone.
+ * @returns {string} The line cut at the first URL path or secret field.
  */
 function redactCredentials(text: string): string {
-  const urls = cutUserinfo(text.replaceAll(JSON_QUOTE, "input is not valid JSON")).replaceAll(
-    URL_TAIL,
-    (_match, scheme: string, host: string, rest: string) =>
-      rest === "" ? `${scheme}${host}` : `${scheme}${host}/REDACTED`,
-  );
-  return cutAtSecret(urls);
+  return cutAtSecret(cutAtUrl(text.replaceAll(JSON_QUOTE, "input is not valid JSON")));
 }
 
 /**
- * An `@` after a URL may end a password that holds anything, so the line goes from that URL on.
+ * Past a URL's host the line goes, past its scheme once an `@` follows: a password holds anything.
  *
  * @param text - One line.
- * @returns {string} The line, or its start and `<scheme>REDACTED` when an `@` follows a URL.
+ * @returns {string} The line up to the first URL with more than a host, then `/REDACTED`.
  */
-function cutUserinfo(text: string): string {
-  const start = URL_START.exec(text);
-  if (start === null || !text.includes("@", start.index)) return text;
-  return `${text.slice(0, start.index)}${start[0]}REDACTED`;
+function cutAtUrl(text: string): string {
+  for (const url of text.matchAll(URL_HOST)) {
+    const [whole, scheme = ""] = url;
+    if (text.includes("@", url.index)) return `${text.slice(0, url.index)}${scheme}REDACTED`;
+    const end = url.index + whole.length;
+    if ("/\\?#".includes(text[end] ?? " ")) return `${text.slice(0, end)}/REDACTED`;
+  }
+  return text;
 }
 
 /**
