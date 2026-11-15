@@ -205,9 +205,8 @@ function boundedLine(text: string): string {
   return `${kept}...`;
 }
 
-/** A URL with whatever follows its host, which is where Alchemy and Infura keep the key. */
-const URL_TAIL =
-  /([a-z][a-z\d+.-]*:[/\\]*)(?:[^\s/\\@"']*@)?([^\s/\\?#@"']+)([^\s"']*?)(?=[:,.;)\]]*(?:[\s"']|$))/gi;
+/** A URL: scheme, authority up to the first `/`, `?` or `#`, then the rest of the token. */
+const URL_TAIL = /([a-z][a-z\d+.-]*:[/\\]*)([^\s/\\?#"']+)([^\s"']*?)(?=[:,.;)\]]*(?:[\s"']|$))/gi;
 /** A field's name and separator, `"apiKey": ` or `x-api-key: ` or `token=`. */
 const FIELD = /(["']?)([a-z][\w-]*)\1(\s*[=:]\s*)(?=\S)/gi;
 const SECRET_NAME = /token|key|secret|pass|auth|sig|session|credential|cookie/i;
@@ -224,9 +223,10 @@ function redactCredentials(text: string): string {
   return cutAtSecret(
     text
       .replaceAll(JSON_QUOTE, "input is not valid JSON")
-      .replaceAll(URL_TAIL, (_match, scheme: string, host: string, rest: string) =>
-        rest === "" ? `${scheme}${host}` : `${scheme}${host}/REDACTED`,
-      ),
+      .replaceAll(URL_TAIL, (_match, scheme: string, authority: string, rest: string) => {
+        const host = authority.slice(authority.lastIndexOf("@") + 1);
+        return rest === "" ? `${scheme}${host}` : `${scheme}${host}/REDACTED`;
+      }),
   );
 }
 
