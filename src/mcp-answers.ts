@@ -194,9 +194,8 @@ function causeText(cause: unknown): string {
 /** A URL with whatever follows its host, which is where Alchemy and Infura keep the key. */
 const URL_TAIL =
   /([a-z][a-z\d+.-]*:[/\\]*)(?:[^\s/\\@"']*@)?([^\s/\\?#@"']+)([^\s"']*?)(?=[:,.;)\]]*(?:[\s"']|$))/gi;
-/** A field and its whole value: quoted, after a scheme like `Bearer`, or bare. */
-const FIELD =
-  /(["']?)([a-z][\w-]*)\1(\s*[=:]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:bearer|basic|digest|token)\s+)?[^\s,;&#"'})\]]+)/gi;
+/** A field's name and separator, `"apiKey": ` or `x-api-key: ` or `token=`. */
+const FIELD = /(["']?)([a-z][\w-]*)\1(\s*[=:]\s*)(?=\S)/gi;
 const SECRET_NAME = /token|key|secret|pass|auth|sig|session|credential|cookie/i;
 /** Node's `JSON.parse` quotes the start of its input, which may be a key file. */
 const JSON_QUOTE = /"[^]*"(?:\.\.\.)? is not valid JSON/g;
@@ -205,17 +204,32 @@ const JSON_QUOTE = /"[^]*"(?:\.\.\.)? is not valid JSON/g;
  * Overcautious on purpose: a cause nobody scrubbed costs a key, a lost path costs a guess.
  *
  * @param text - One line that may quote a URL, a field or a broken JSON input.
- * @returns {string} The line with each URL cut to scheme and host and secret values replaced.
+ * @returns {string} The line with each URL cut to scheme and host and secret values gone.
  */
 function redactCredentials(text: string): string {
-  return text
-    .replaceAll(JSON_QUOTE, "input is not valid JSON")
-    .replaceAll(URL_TAIL, (_match, scheme: string, host: string, rest: string) =>
-      rest === "" ? `${scheme}${host}` : `${scheme}${host}/REDACTED`,
-    )
-    .replaceAll(FIELD, (match, quote: string, name: string, separator: string) =>
-      isSecretField(quote, name, separator) ? `${quote}${name}${quote}${separator}REDACTED` : match,
-    );
+  return cutAtSecret(
+    text
+      .replaceAll(JSON_QUOTE, "input is not valid JSON")
+      .replaceAll(URL_TAIL, (_match, scheme: string, host: string, rest: string) =>
+        rest === "" ? `${scheme}${host}` : `${scheme}${host}/REDACTED`,
+      ),
+  );
+}
+
+/**
+ * Everything after the first secret field goes: a value's own end (quotes, `; sid=`) is no border.
+ *
+ * @param text - One line, URLs already cut.
+ * @returns {string} The line up to that field's separator, then `REDACTED`.
+ */
+function cutAtSecret(text: string): string {
+  for (const field of text.matchAll(FIELD)) {
+    const [whole, quote = "", name = "", separator = ""] = field;
+    if (isSecretField(quote, name, separator)) {
+      return `${text.slice(0, field.index + whole.length)}REDACTED`;
+    }
+  }
+  return text;
 }
 
 /**
