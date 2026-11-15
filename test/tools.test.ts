@@ -848,6 +848,118 @@ describe("MCP adapter", () => {
     });
   });
 
+  describe("a thrown error with causes", () => {
+    const thrower = (error: unknown): ToolDefinition =>
+      defineTool({
+        name: "demo_fallback",
+        title: "Demo Fallback",
+        description: "Fail through a chain of causes.",
+        effect: "read",
+        input: Type.Object({}),
+        execute(): ToolResult<null> {
+          throw error;
+        },
+      });
+    const answer = async (error: unknown): Promise<string | undefined> =>
+      firstText(await callTool({ name: "demo" }, [thrower(error)], "demo_fallback"));
+
+    it("reads each cause on its own line, outermost first", async () => {
+      const first = new Error("HTTP 502 from haskoin");
+      const second = new Error("Rate limited by blockchair", { cause: first });
+      expect(await answer(second)).toBe(
+        "demo_fallback failed: Rate limited by blockchair\ncaused by: HTTP 502 from haskoin",
+      );
+    });
+
+    it("stops on a cycle and after five levels", async () => {
+      const a = new Error("a");
+      const b = new Error("b", { cause: a });
+      a.cause = b;
+      expect(await answer(b)).toBe("demo_fallback failed: b\ncaused by: a");
+
+      let deep = new Error("level 0");
+      for (let level = 1; level <= 8; level += 1)
+        deep = new Error(`level ${level}`, { cause: deep });
+      expect((await answer(deep))?.split("\n")).toEqual([
+        "demo_fallback failed: level 8",
+        ...[7, 6, 5, 4, 3].map((level) => `caused by: level ${level}`),
+      ]);
+    });
+
+    it("redacts what a cause quotes and keeps each cause on one short line", async () => {
+      const quoted = [
+        "HTTP 502 from https://mainnet.infura.io/v3/s3cret: Bad Gateway",
+        "Request cannot be constructed from a URL that includes credentials: https://user:pw@api.example.com/?apikey=s3cret",
+        `Unexpected token 'c', "cfk_s3cret" is not valid JSON`,
+        "upstream said Authorization=s3cret, page=2",
+        "Cookie: theme=dark; sid=s3cret",
+        "GET https://user:first@s3cret@api.example.com/v3 failed",
+        "GET https://api.example.com/v3?token='s3cret' failed",
+        "GET https://api.example.com/v3?token=prefix@s3cret failed",
+        "GET https://user:s3 cret@api.example.com failed",
+        "GET https://api.example.com/v3?authorization=Bearer s3cret failed",
+        "HTTP 502 from https://api.example.com: Bad Gateway",
+        `GET "https://user:a'b"c\\d@api.example.com/v3" failed`,
+        `refused apiKey="${"s".repeat(1300)}"`,
+        `refused https://user:${"p".repeat(1300)}@api.example.com/v3`,
+        "no response from http://localhost:3000, retrying",
+        `apiKey="s3cret" was refused`,
+        "Authorization: Bearer s3cret",
+        `{"token":"s3 \\"cret","page":2}`,
+        "Invalid key: must be 64 hex digits",
+      ];
+      const lines = await Promise.all(
+        quoted.map(
+          async (message) =>
+            (await answer(new Error("top", { cause: new Error(message) })))?.split("\n")[1],
+        ),
+      );
+      expect(lines).toEqual([
+        "caused by: HTTP 502 from https://mainnet.infura.io/REDACTED",
+        "caused by: Request cannot be constructed from a URL that includes credentials: https://REDACTED",
+        "caused by: Unexpected token 'c', input is not valid JSON",
+        "caused by: upstream said Authorization=REDACTED",
+        "caused by: Cookie: REDACTED",
+        "caused by: GET https://REDACTED",
+        "caused by: GET https://api.example.com/REDACTED",
+        "caused by: GET https://REDACTED",
+        "caused by: GET https://REDACTED",
+        "caused by: GET https://api.example.com/REDACTED",
+        "caused by: HTTP 502 from https://api.example.com: Bad Gateway",
+        `caused by: GET "https://REDACTED`,
+        "caused by: refused ...",
+        "caused by: refused ...",
+        "caused by: no response from http://localhost:3000, retrying",
+        "caused by: apiKey=REDACTED",
+        "caused by: Authorization: REDACTED",
+        `caused by: {"token":REDACTED`,
+        "caused by: Invalid key: must be 64 hex digits",
+      ]);
+
+      const long = await answer(new Error("top", { cause: new Error(`x\n${"y".repeat(400)}`) }));
+      expect(long?.split("\n")[1]).toBe(`caused by: x ${"y".repeat(298)}...`);
+    });
+
+    it("reads through what fetch throws: an empty AggregateError, then the attempt", async () => {
+      const attempt = Object.assign(new Error("connect ECONNREFUSED ::1:3000"), {
+        code: "ECONNREFUSED",
+      });
+      const refused = new AggregateError([attempt], "");
+      expect(await answer(new TypeError("fetch failed", { cause: refused }))).toBe(
+        "demo_fallback failed: fetch failed\ncaused by: connect ECONNREFUSED ::1:3000",
+      );
+    });
+
+    it("skips a cause the message above already quotes, and answers as before without one", async () => {
+      const inner = new Error("ETIMEDOUT");
+      expect(await answer(new Error("no response: ETIMEDOUT", { cause: inner }))).toBe(
+        "demo_fallback failed: no response: ETIMEDOUT",
+      );
+      expect(await answer(new Error("plain"))).toBe("demo_fallback failed: plain");
+      expect(await answer("just a string")).toBe("demo_fallback failed: just a string");
+    });
+  });
+
   it("rejects two tools with one name", () => {
     expect(() => createMcpServer({ name: "demo", version: "0.0.0" }, [echo, echo])).toThrow(
       ToolDefinitionError,
