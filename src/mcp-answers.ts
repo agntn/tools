@@ -205,6 +205,8 @@ function boundedLine(text: string): string {
   return `${kept}...`;
 }
 
+/** Scheme to the token's last `@`: any character can sit in a password, quotes included. */
+const USERINFO = /([a-z][a-z\d+.-]*:[/\\]*)\S*@/gi;
 /** A URL: scheme, authority up to the first `/`, `?` or `#`, then the rest of the token. */
 const URL_TAIL = /([a-z][a-z\d+.-]*:[/\\]*)([^\s/\\?#"']+)([^\s"']*?)(?=[:,.;)\]]*(?:[\s"']|$))/gi;
 /** A field's name and separator, `"apiKey": ` or `x-api-key: ` or `token=`. */
@@ -223,10 +225,10 @@ function redactCredentials(text: string): string {
   return cutAtSecret(
     text
       .replaceAll(JSON_QUOTE, "input is not valid JSON")
-      .replaceAll(URL_TAIL, (_match, scheme: string, authority: string, rest: string) => {
-        const host = authority.slice(authority.lastIndexOf("@") + 1);
-        return rest === "" ? `${scheme}${host}` : `${scheme}${host}/REDACTED`;
-      }),
+      .replaceAll(USERINFO, "$1")
+      .replaceAll(URL_TAIL, (_match, scheme: string, host: string, rest: string) =>
+        rest === "" ? `${scheme}${host}` : `${scheme}${host}/REDACTED`,
+      ),
   );
 }
 
