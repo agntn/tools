@@ -205,8 +205,8 @@ function boundedLine(text: string): string {
   return `${kept}...`;
 }
 
-/** Scheme to the line's last `@`: a password may hold quotes and spaces, so nothing else ends it. */
-const USERINFO = /\b((?:[a-z][a-z\d+.-]*:[/\\]+|(?:https?|wss?|ftp):)).*@/gi;
+/** Where a URL starts: a scheme with slashes, or a web one without. */
+const URL_START = /\b(?:[a-z][a-z\d+.-]*:[/\\]+|(?:https?|wss?|ftp):)/i;
 /** A URL's host, then the whole rest of its token: quotes inside count, closing ones stay. */
 const URL_TAIL = /([a-z][a-z\d+.-]*:[/\\]*)([^\s/\\?#"']+)(\S*?)(?=[:,.;)\]"']*(?:\s|$))/gi;
 /** A field's name and separator, `"apiKey": ` or `x-api-key: ` or `token=`. */
@@ -222,14 +222,24 @@ const JSON_QUOTE = /"[^]*"(?:\.\.\.)? is not valid JSON/g;
  * @returns {string} The line with each URL cut to scheme and host and secret values gone.
  */
 function redactCredentials(text: string): string {
-  return cutAtSecret(
-    text
-      .replaceAll(JSON_QUOTE, "input is not valid JSON")
-      .replaceAll(USERINFO, "$1")
-      .replaceAll(URL_TAIL, (_match, scheme: string, host: string, rest: string) =>
-        rest === "" ? `${scheme}${host}` : `${scheme}${host}/REDACTED`,
-      ),
+  const urls = cutUserinfo(text.replaceAll(JSON_QUOTE, "input is not valid JSON")).replaceAll(
+    URL_TAIL,
+    (_match, scheme: string, host: string, rest: string) =>
+      rest === "" ? `${scheme}${host}` : `${scheme}${host}/REDACTED`,
   );
+  return cutAtSecret(urls);
+}
+
+/**
+ * An `@` after a URL may end a password that holds anything, so the line goes from that URL on.
+ *
+ * @param text - One line.
+ * @returns {string} The line, or its start and `<scheme>REDACTED` when an `@` follows a URL.
+ */
+function cutUserinfo(text: string): string {
+  const start = URL_START.exec(text);
+  if (start === null || !text.includes("@", start.index)) return text;
+  return `${text.slice(0, start.index)}${start[0]}REDACTED`;
 }
 
 /**
