@@ -205,10 +205,10 @@ function boundedLine(text: string): string {
   return `${kept}...`;
 }
 
-/** Scheme to the token's last `@`: any character can sit in a password, quotes included. */
-const USERINFO = /([a-z][a-z\d+.-]*:[/\\]*)\S*@/gi;
-/** A URL: scheme, authority up to the first `/`, `?` or `#`, then the rest of the token. */
-const URL_TAIL = /([a-z][a-z\d+.-]*:[/\\]*)([^\s/\\?#"']+)([^\s"']*?)(?=[:,.;)\]]*(?:[\s"']|$))/gi;
+/** Scheme to the line's last `@`: a password may hold quotes and spaces, so nothing else ends it. */
+const USERINFO = /\b((?:[a-z][a-z\d+.-]*:[/\\]+|(?:https?|wss?|ftp):)).*@/gi;
+/** A URL's host, then the whole rest of its token: quotes inside count, closing ones stay. */
+const URL_TAIL = /([a-z][a-z\d+.-]*:[/\\]*)([^\s/\\?#"']+)(\S*?)(?=[:,.;)\]"']*(?:\s|$))/gi;
 /** A field's name and separator, `"apiKey": ` or `x-api-key: ` or `token=`. */
 const FIELD = /(["']?)([a-z][\w-]*)\1(\s*[=:]\s*)(?=\S)/gi;
 const SECRET_NAME = /token|key|secret|pass|auth|sig|session|credential|cookie/i;
