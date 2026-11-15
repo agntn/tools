@@ -194,16 +194,17 @@ function causeText(cause: unknown): string {
 /** A URL with whatever follows its host, which is where Alchemy and Infura keep the key. */
 const URL_TAIL =
   /([a-z][a-z\d+.-]*:[/\\]*)(?:[^\s/\\@"']*@)?([^\s/\\?#@"']+)([^\s"']*?)(?=[:,.;)\]]*(?:[\s"']|$))/gi;
-/** `name=value` anywhere in the text, judged by the name. */
-const ASSIGNMENT = /\b([a-z][\w-]*)=[^\s&#"']+?(?=[:,.;)\]]*(?:[\s&#"']|$))/gi;
-const SECRET_NAME = /token|key|secret|pass|auth|sig|session|credential/i;
+/** A field and its whole value: quoted, after a scheme like `Bearer`, or bare. */
+const FIELD =
+  /(["']?)([a-z][\w-]*)\1(\s*[=:]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:bearer|basic|digest|token)\s+)?[^\s,;&#"'})\]]+)/gi;
+const SECRET_NAME = /token|key|secret|pass|auth|sig|session|credential|cookie/i;
 /** Node's `JSON.parse` quotes the start of its input, which may be a key file. */
 const JSON_QUOTE = /"[^]*"(?:\.\.\.)? is not valid JSON/g;
 
 /**
  * Overcautious on purpose: a cause nobody scrubbed costs a key, a lost path costs a guess.
  *
- * @param text - One line that may quote a URL, an assignment or a broken JSON input.
+ * @param text - One line that may quote a URL, a field or a broken JSON input.
  * @returns {string} The line with each URL cut to scheme and host and secret values replaced.
  */
 function redactCredentials(text: string): string {
@@ -212,9 +213,23 @@ function redactCredentials(text: string): string {
     .replaceAll(URL_TAIL, (_match, scheme: string, host: string, rest: string) =>
       rest === "" ? `${scheme}${host}` : `${scheme}${host}/REDACTED`,
     )
-    .replaceAll(ASSIGNMENT, (match, name: string) =>
-      SECRET_NAME.test(name) ? `${name}=REDACTED` : match,
+    .replaceAll(FIELD, (match, quote: string, name: string, separator: string) =>
+      isSecretField(quote, name, separator) ? `${quote}${name}${quote}${separator}REDACTED` : match,
     );
+}
+
+/**
+ * A bare `name:` is prose (`Invalid key: must be hex`), so only JSON and header shapes count there.
+ *
+ * @param quote - Quote around the name, empty for none.
+ * @param name - The field's name.
+ * @param separator - `=` or `:` with the spaces around it.
+ * @returns {boolean} Whether the value after it gets redacted.
+ */
+function isSecretField(quote: string, name: string, separator: string): boolean {
+  if (!SECRET_NAME.test(name)) return false;
+  if (!separator.includes(":") || quote !== "") return true;
+  return name.includes("-") || /^(?:authorization|cookie)$/i.test(name);
 }
 
 /**

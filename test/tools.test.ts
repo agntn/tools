@@ -893,6 +893,10 @@ describe("MCP adapter", () => {
         `Unexpected token 'c', "cfk_s3cret" is not valid JSON`,
         "upstream said Authorization=s3cret, page=2",
         "no response from http://localhost:3000, retrying",
+        `apiKey="s3cret" was refused`,
+        "Authorization: Bearer s3cret",
+        `{"token":"s3 \\"cret","page":2}`,
+        "Invalid key: must be 64 hex digits",
       ];
       const lines = await Promise.all(
         quoted.map(
@@ -906,6 +910,10 @@ describe("MCP adapter", () => {
         "caused by: Unexpected token 'c', input is not valid JSON",
         "caused by: upstream said Authorization=REDACTED, page=2",
         "caused by: no response from http://localhost:3000, retrying",
+        "caused by: apiKey=REDACTED was refused",
+        "caused by: Authorization: REDACTED",
+        `caused by: {"token":REDACTED,"page":2}`,
+        "caused by: Invalid key: must be 64 hex digits",
       ]);
 
       const long = await answer(new Error("top", { cause: new Error(`x\n${"y".repeat(400)}`) }));
