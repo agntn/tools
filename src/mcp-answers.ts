@@ -134,8 +134,87 @@ export async function callTool(
     if (error instanceof ToolInputError) return errorResult(...error.lines);
     return errorResult(
       `${tool.name} failed: ${error instanceof Error ? error.message : String(error)}`,
+      ...causeLines(error),
     );
   }
+}
+
+/** How far down `cause` an answer reads, and how long one of its lines may run. */
+const CAUSE_DEPTH = 5;
+const CAUSE_LENGTH = 300;
+
+/**
+ * One `caused by:` line per level under a thrown error, so a fallback's first failure survives.
+ *
+ * @param error - What the tool threw.
+ * @returns {string[]} Up to {@link CAUSE_DEPTH} lines, credentials in URLs redacted.
+ */
+function causeLines(error: unknown): string[] {
+  const lines: string[] = [];
+  const seen = new Set<unknown>([error]);
+  let above = error instanceof Error ? error.message : String(error);
+  let level = nextCause(error);
+  for (let depth = 0; depth < CAUSE_DEPTH && level !== undefined && !seen.has(level); depth += 1) {
+    seen.add(level);
+    const text = causeText(level);
+    if (text !== "" && !above.includes(text)) lines.push(`caused by: ${text}`);
+    if (text !== "") above = text;
+    level = nextCause(level);
+  }
+  return lines;
+}
+
+/**
+ * The level under this one: its `cause`, or the first attempt of an `AggregateError` without one.
+ *
+ * @param error - One level of the chain.
+ * @returns {unknown} The next level, `undefined` at the bottom.
+ */
+function nextCause(error: unknown): unknown {
+  if (!(error instanceof Error)) return undefined;
+  if (error.cause !== undefined) return error.cause;
+  return error instanceof AggregateError ? (error.errors as unknown[])[0] : undefined;
+}
+
+/**
+ * The line a cause gets: its message cut to {@link CAUSE_LENGTH} characters, credentials gone.
+ * A package hides keys in the message it throws; nobody checked the raw error underneath.
+ *
+ * @param cause - One level of the chain.
+ * @returns {string} Its text, empty when it has none worth a line.
+ */
+function causeText(cause: unknown): string {
+  let text = "";
+  if (cause instanceof Error) text = cause.message;
+  else if (typeof cause === "string") text = cause;
+  const safe = redactCredentials(sanitizeLine(text.slice(0, CAUSE_LENGTH * 4)));
+  return safe.length > CAUSE_LENGTH ? `${safe.slice(0, CAUSE_LENGTH).toWellFormed()}...` : safe;
+}
+
+/** A URL with whatever follows its host, which is where Alchemy and Infura keep the key. */
+const URL_TAIL =
+  /([a-z][a-z\d+.-]*:[/\\]*)(?:[^\s/\\@"']*@)?([^\s/\\?#@"']+)([^\s"']*?)(?=[:,.;)\]]*(?:[\s"']|$))/gi;
+/** `name=value` anywhere in the text, judged by the name. */
+const ASSIGNMENT = /\b([a-z][\w-]*)=[^\s&#"']+?(?=[:,.;)\]]*(?:[\s&#"']|$))/gi;
+const SECRET_NAME = /token|key|secret|pass|auth|sig|session|credential/i;
+/** Node's `JSON.parse` quotes the start of its input, which may be a key file. */
+const JSON_QUOTE = /"[^]*"(?:\.\.\.)? is not valid JSON/g;
+
+/**
+ * Overcautious on purpose: a cause nobody scrubbed costs a key, a lost path costs a guess.
+ *
+ * @param text - One line that may quote a URL, an assignment or a broken JSON input.
+ * @returns {string} The line with each URL cut to scheme and host and secret values replaced.
+ */
+function redactCredentials(text: string): string {
+  return text
+    .replaceAll(JSON_QUOTE, "input is not valid JSON")
+    .replaceAll(URL_TAIL, (_match, scheme: string, host: string, rest: string) =>
+      rest === "" ? `${scheme}${host}` : `${scheme}${host}/REDACTED`,
+    )
+    .replaceAll(ASSIGNMENT, (match, name: string) =>
+      SECRET_NAME.test(name) ? `${name}=REDACTED` : match,
+    );
 }
 
 /**
