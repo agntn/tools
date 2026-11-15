@@ -187,8 +187,22 @@ function causeText(cause: unknown): string {
   let text = "";
   if (cause instanceof Error) text = cause.message;
   else if (typeof cause === "string") text = cause;
-  const safe = redactCredentials(sanitizeLine(text.slice(0, CAUSE_LENGTH * 4)));
+  const safe = redactCredentials(boundedLine(text));
   return safe.length > CAUSE_LENGTH ? `${safe.slice(0, CAUSE_LENGTH).toWellFormed()}...` : safe;
+}
+
+/**
+ * Cut before redacting, so a huge cause stays cheap; the word the cut splits goes whole.
+ *
+ * @param text - A cause's message.
+ * @returns {string} One line of at most four cause lengths, ending in `...` when cut.
+ */
+function boundedLine(text: string): string {
+  const line = sanitizeLine(text);
+  const limit = CAUSE_LENGTH * 4;
+  if (line.length <= limit) return line;
+  const kept = line.slice(0, line.lastIndexOf(" ", limit) + 1);
+  return `${kept}...`;
 }
 
 /** A URL with whatever follows its host, which is where Alchemy and Infura keep the key. */
