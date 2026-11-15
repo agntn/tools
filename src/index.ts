@@ -60,8 +60,9 @@ export type ToolEffect = "read" | "write" | "destructive" | "exec";
  * name without its package prefix, in kebab case, and every property is a flag.
  */
 export interface ToolCliHints {
-  /** Command name instead of the derived one. */
+  /** Command name instead of the derived one. Two words, as `servers list`, put it in a group. */
   readonly command?: string;
+  /** More words for the command's last word: `ls` reaches `servers list` as `servers ls`. */
   readonly aliases?: readonly string[];
   /** Line in the command list. Defaults to the first sentence of `description`. */
   readonly description?: string;

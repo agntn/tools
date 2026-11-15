@@ -22,7 +22,7 @@ import {
   type ToolDefinition,
   type TSchema,
 } from "../src/index.ts";
-import { demoTools, DemoError, echo, serverInfo } from "./fixtures/demo.ts";
+import { demoTools, DemoError, echo, measure, serverInfo } from "./fixtures/demo.ts";
 
 const options: CliOptions = {
   name: "demo",
@@ -1180,12 +1180,16 @@ describe("CLI definitions", () => {
     );
     await expect(build(tool({ stdin: ["text"] }))).rejects.toThrow(/must be a string/);
     await expect(build(tool({}, true))).rejects.toThrow(/reserved flag --json/);
-    for (const word of ["--foo", "-x", "", "two words"]) {
+    for (const word of ["--foo", "-x", "", " lead", "group --foo"]) {
       await expect(build(tool({ command: word }))).rejects.toThrow(/must match/);
       expect(() =>
         createCli({ ...options, tools: [tool({ command: "ok", aliases: [word] })] }),
       ).toThrow(/must match/);
     }
+    await expect(build(tool({ command: "one two three" }))).rejects.toThrow(/two words at most/);
+    expect(() =>
+      createCli({ ...options, tools: [tool({ command: "ok", aliases: ["two words"] })] }),
+    ).toThrow(/must match/);
   });
 
   it("rejects two options read under one spelling", () => {
@@ -1319,6 +1323,116 @@ describe("CLI definitions", () => {
         commands: [{ ...echo, name: "demo_own_measure", cli: { command: "measure" } }],
       }),
     ).not.toThrow();
+  });
+});
+
+describe("CLI command groups", () => {
+  const servers = (command: string, aliases?: readonly string[]) =>
+    defineTool({
+      name: `demo_servers_${command.replaceAll(" ", "_")}`,
+      title: command,
+      description: `Servers ${command}.`,
+      effect: "read",
+      input: Type.Object(
+        { id: Type.Optional(Type.String({ description: "Harness id" })) },
+        { additionalProperties: false },
+      ),
+      cli: { command: `servers ${command}`, positional: ["id"], aliases },
+      execute: ({ id }) => ({
+        content: [{ type: "text", text: `${command} ${id ?? "all"}` }],
+        details: null,
+      }),
+    });
+  const grouped: CliOptions = {
+    name: "demo",
+    version: "1.2.3",
+    description: "Demo tools",
+    tools: [echo, servers("list", ["ls"]), servers("add"), measure],
+    groups: { servers: { description: "Manage servers", aliases: ["srv"] } },
+  };
+
+  it("runs a command by its group and name, an alias at either level", async () => {
+    expect((await run(["servers", "list"], grouped)).stdout).toBe("list all\n");
+    expect((await run(["servers", "add", "pi"], grouped)).stdout).toBe("add pi\n");
+    expect((await run(["srv", "ls", "pi"], grouped)).stdout).toBe("list pi\n");
+    expect((await run(["echo", "hi"], grouped)).stdout).toBe("hi\n");
+  });
+
+  it("lists a group once, where its first command stood, and its commands in its own help", async () => {
+    const root = (await run(["--help"], grouped)).stdout;
+    expect(root).toMatch(/^ {2}servers, srv +Manage servers$/m);
+    expect(root).not.toContain("list");
+    expect(root.indexOf("echo")).toBeLessThan(root.indexOf("servers"));
+    expect(root.indexOf("servers")).toBeLessThan(root.indexOf("measure"));
+    const group = (await run(["servers", "--help"], grouped)).stdout;
+    expect(group).toContain("Manage servers (demo servers v1.2.3)\n");
+    expect(group).toContain("USAGE demo servers <command> [OPTIONS]\n");
+    expect(group).toContain("  list, ls  Servers list.\n");
+    expect(group).toContain("Use demo servers <command> --help");
+  });
+
+  it("shows a bare group's usage on stderr and fails, like a bare root", async () => {
+    const bare = await run(["servers"], grouped);
+    expect(bare.stdout).toBe("");
+    expect(bare.stderr).toContain("USAGE demo servers <command> [OPTIONS]");
+    expect(bare.stderr).toContain("No command specified\n");
+    expect(bare.exitCode).toBe(1);
+  });
+
+  it("names an unknown second word with its group", async () => {
+    const typo = await run(["servers", "lsit"], grouped);
+    expect(typo.stderr).toBe(
+      'Unknown command "servers lsit"\nRun demo servers --help for the commands\n',
+    );
+    expect(typo.exitCode).toBe(1);
+  });
+
+  it("gives a grouped command its full path in the usage", async () => {
+    const { stdout } = await run(["servers", "ls", "--help"], grouped);
+    expect(stdout).toContain("(demo servers list v1.2.3)");
+    expect(stdout).toContain("USAGE demo servers list [OPTIONS] [ID]");
+  });
+
+  it("names the group's commands when no description says more", async () => {
+    const { stdout } = await run(["--help"], { ...grouped, groups: undefined });
+    expect(stdout).toMatch(/^ {2}servers +list, add$/m);
+    expect((await run(["servers", "-h"], { ...grouped, groups: undefined })).stdout).toContain(
+      "Commands of servers (demo servers v1.2.3)",
+    );
+  });
+
+  it("takes two words as default and fallback", async () => {
+    const both: CliOptions = { ...grouped, default: "servers list", fallback: "servers add" };
+    expect(normalizeArgv(both, [])).toEqual(["servers", "list"]);
+    expect((await run([], both)).stdout).toBe("list all\n");
+    expect((await run(["pi"], both)).stdout).toBe("add pi\n");
+    expect(normalizeArgv(both, ["srv", "ls"])).toEqual(["srv", "ls"]);
+    expect(() => createCli({ ...grouped, default: "servers" })).toThrow(/no command servers/);
+    expect(() => createCli({ ...grouped, fallback: "servers nope" })).toThrow(
+      /no command servers nope/,
+    );
+  });
+
+  it("rejects clashes inside a group and between a group and a command", () => {
+    expect(() =>
+      createCli({ ...grouped, tools: [servers("list"), servers("add", ["list"])] }),
+    ).toThrow(/Two commands are named servers list/);
+    const clash = defineTool({ ...echo, name: "demo_servers", cli: { command: "servers" } });
+    expect(() => createCli({ ...grouped, tools: [clash, servers("list")] })).toThrow(
+      /Two commands are named servers/,
+    );
+    expect(() => createCli({ ...grouped, groups: { servers: { aliases: ["echo"] } } })).toThrow(
+      /Two commands are named echo/,
+    );
+    expect(() => createCli({ ...grouped, groups: { nope: {} } })).toThrow(/no group nope/);
+    expect(() => createCli({ ...grouped, groups: { servers: { aliases: ["--x"] } } })).toThrow(
+      /must match/,
+    );
+  });
+
+  it("keeps commands of one word as they were", () => {
+    expect(commandName(servers("list"))).toBe("servers list");
+    expect(commandName(echo)).toBe("echo");
   });
 });
 

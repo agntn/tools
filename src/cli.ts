@@ -46,7 +46,12 @@ export interface CliOptions {
    * and leaves `progress` alone: on a terminal its line would sit in front of the rows.
    */
   readonly commands?: readonly ToolDefinition[];
-  /** Command for an empty command line. */
+  /**
+   * Groups the `cli.command` hints open with a first word, as `servers` in
+   * `servers list`: their line in the command list and more words for them.
+   */
+  readonly groups?: Readonly<Record<string, CliGroup>>;
+  /** Command for an empty command line, two words for a command in a group. */
   readonly default?: string;
   /** Command for a first word that names no command: `hashes sha256 x` runs `hashes hash sha256 x`. */
   readonly fallback?: string;
@@ -57,6 +62,13 @@ export interface CliOptions {
    * code 1; any other error keeps its stack trace.
    */
   readonly expected?: (error: unknown) => boolean;
+}
+
+/** A group of commands: `servers` in `servers list` and `servers add`. */
+export interface CliGroup {
+  /** Line in the command list. Defaults to the names of its commands. */
+  readonly description?: string;
+  readonly aliases?: readonly string[];
 }
 
 /** What a CLI command finds in `host`: narrow to it and look at `json` before writing a byte. */
@@ -123,10 +135,11 @@ function flagName(key: string): string {
 
 /**
  * @param tool - Tool to name.
- * @returns {string} The hinted command, or the tool name without its package prefix, in kebab case.
+ * @returns {string} The hinted command, two words for one in a group, or the tool name without
+ *   its package prefix, in kebab case.
  */
 export function commandName(tool: ToolDefinition): string {
-  if (tool.cli?.command !== undefined) return commandWord(tool.name, tool.cli.command);
+  if (tool.cli?.command !== undefined) return commandPath(tool.name, tool.cli.command);
   const separator = tool.name.indexOf("_");
   const derived = separator === -1 ? tool.name : tool.name.slice(separator + 1);
   // `pkg__h` would derive `-h` and `pkg_` nothing; neither can be dispatched.
@@ -149,6 +162,23 @@ function commandWord(owner: string, word: string): string {
     );
   }
   return word;
+}
+
+/**
+ * @param owner - Tool the command belongs to, for the error.
+ * @param path - Hinted command: a name, or a group and a name split by one space.
+ * @returns {string} The path, checked.
+ * @throws {ToolDefinitionError} On three words or a word no line can reach.
+ */
+function commandPath(owner: string, path: string): string {
+  const words = path.split(" ");
+  if (words.length > 2) {
+    throw new ToolDefinitionError(
+      `${owner}: command ${JSON.stringify(path)} takes two words at most`,
+    );
+  }
+  for (const word of words) commandWord(owner, word);
+  return path;
 }
 
 /**
@@ -1283,7 +1313,10 @@ function progressLine(): ProgressLine {
 
 /** One command the CLI dispatches to: a tool, a package command or `mcp`. */
 interface Command {
+  /** Words that reach it after the executable: one, or a group and one. */
   readonly name: string;
+  /** The last of them, the one its aliases stand in for. */
+  readonly word: string;
   readonly aliases: readonly string[];
   /** Line in the command list. */
   readonly summary: string;
@@ -1300,8 +1333,10 @@ interface Command {
 function toolCommand(tool: ToolDefinition): Command {
   const fields = toolFields(tool);
   const [summary = tool.title] = tool.description.split(/(?<=[.!?])\s/, 1);
+  const name = commandName(tool);
   return {
-    name: commandName(tool),
+    name,
+    word: name.slice(name.indexOf(" ") + 1),
     aliases: (tool.cli?.aliases ?? []).map((alias) => commandWord(tool.name, alias)),
     summary: tool.cli?.description ?? summary,
     fields,
@@ -1340,6 +1375,7 @@ function toolCommand(tool: ToolDefinition): Command {
 function mcpCommand(options: CliOptions): Command {
   return {
     name: "mcp",
+    word: "mcp",
     aliases: [],
     summary: `Run the ${options.name} MCP server over stdio`,
     fields: [],
@@ -1384,13 +1420,118 @@ function builtInMcp(options: CliOptions): boolean {
 
 /**
  * @param options - CLI options.
- * @returns {string[]} Every command name and alias, `mcp` included when built in.
+ * @returns {string[]} Every word a command line can open with: command names and aliases,
+ *   groups and their aliases, `mcp` when built in.
  */
-function commandWords(options: CliOptions): string[] {
+function leadWords(options: CliOptions): string[] {
   return [
-    ...commandTools(options).flatMap((tool) => [commandName(tool), ...(tool.cli?.aliases ?? [])]),
+    ...commandTools(options).flatMap((tool) => {
+      const [lead = "", word] = commandName(tool).split(" ");
+      return word === undefined ? [lead, ...(tool.cli?.aliases ?? [])] : [lead];
+    }),
+    ...Object.values(options.groups ?? {}).flatMap((group) => group.aliases ?? []),
     ...(builtInMcp(options) ? ["mcp"] : []),
   ];
+}
+
+/** A group in the command list, holding the commands named after it. */
+interface Group {
+  readonly word: string;
+  readonly aliases: readonly string[];
+  readonly summary: string;
+  readonly scope: Scope;
+}
+
+/** What a word on the command line can pick at one level. */
+type Entry = Command | Group;
+
+/** One level of the command line: the root, or a group. */
+interface Scope {
+  /** Words that reach it after the executable: none at the root, the group's in a group. */
+  readonly words: readonly string[];
+  /** First line of its usage. */
+  readonly title: string;
+  readonly entries: readonly Entry[];
+}
+
+/**
+ * @param entries - Entries of one level.
+ * @param word - Word on the command line.
+ * @returns {Entry | undefined} The entry of that name or alias.
+ */
+function findEntry(entries: readonly Entry[], word: string): Entry | undefined {
+  return entries.find((entry) => entry.word === word || entry.aliases.includes(word));
+}
+
+/**
+ * @param entries - Entries of the root.
+ * @param words - Command words, a group first for a command in one.
+ * @returns {Command | undefined} The command they reach, not a group on its own.
+ */
+function findCommand(entries: readonly Entry[], words: readonly string[]): Command | undefined {
+  const [first, ...rest] = words;
+  const entry = first === undefined ? undefined : findEntry(entries, first);
+  if (entry !== undefined && "scope" in entry) return findCommand(entry.scope.entries, rest);
+  return rest.length === 0 ? entry : undefined;
+}
+
+/**
+ * @param prefix - Group the entries sit in, with a trailing space, or nothing at the root.
+ * @param entries - Entries of one level.
+ * @throws {ToolDefinitionError} When two of them share a name or alias.
+ */
+function assertUnique(prefix: string, entries: readonly Entry[]): void {
+  const words = entries.flatMap((entry) => [entry.word, ...entry.aliases]);
+  const repeated = words.find((word, index) => words.indexOf(word) !== index);
+  if (repeated !== undefined) {
+    throw new ToolDefinitionError(`Two commands are named ${prefix}${repeated}`);
+  }
+}
+
+/**
+ * @param options - CLI options.
+ * @param word - Group name.
+ * @param commands - The commands in it, in listing order.
+ * @returns {Group} The group, its hints read.
+ * @throws {ToolDefinitionError} On a bad alias or two commands sharing a word.
+ */
+function commandGroup(options: CliOptions, word: string, commands: readonly Command[]): Group {
+  const hints = options.groups?.[word] ?? {};
+  assertUnique(`${word} `, commands);
+  return {
+    word,
+    aliases: (hints.aliases ?? []).map((alias) => commandWord(`${options.name} ${word}`, alias)),
+    summary: hints.description ?? commands.map((command) => command.word).join(", "),
+    scope: {
+      words: [word],
+      title: `${hints.description ?? `Commands of ${word}`} (${options.name} ${word} v${options.version})`,
+      entries: commands,
+    },
+  };
+}
+
+/**
+ * Puts each command with two words into the group of its first one, where the
+ * first command of that group stood.
+ *
+ * @param options - CLI options.
+ * @param commands - Every command, in listing order.
+ * @returns {Entry[]} The entries of the root.
+ * @throws {ToolDefinitionError} When two entries share a word, or `groups` names no group.
+ */
+function rootEntries(options: CliOptions, commands: readonly Command[]): Entry[] {
+  const byLead = Map.groupBy(commands, (command) => command.name.split(" ", 1)[0] ?? "");
+  const entries = [...byLead].flatMap(([lead, members]) => {
+    const grouped = members.filter((command) => command.name !== command.word);
+    const single = members.filter((command) => command.name === command.word);
+    return grouped.length === 0 ? single : [...single, commandGroup(options, lead, grouped)];
+  });
+  const unknown = Object.keys(options.groups ?? {}).find(
+    (word) => !entries.some((entry) => "scope" in entry && entry.word === word),
+  );
+  if (unknown !== undefined) throw new ToolDefinitionError(`${options.name}: no group ${unknown}`);
+  assertUnique("", entries);
+  return entries;
 }
 
 /** A built command line interface. */
@@ -1405,7 +1546,8 @@ export interface Cli {
  *
  * @param options - CLI options.
  * @returns {Cli} The CLI.
- * @throws {ToolDefinitionError} When two commands share a name or alias, a hint does not fit its schema, or `default` or `fallback` names no command.
+ * @throws {ToolDefinitionError} When two commands share a name or alias, a hint does not fit its
+ *   schema, `groups` names no group, or `default` or `fallback` names no command.
  */
 export function createCli(options: CliOptions): Cli {
   indexTools(options.tools);
@@ -1414,16 +1556,18 @@ export function createCli(options: CliOptions): Cli {
     ...commandTools(options).map((tool) => toolCommand(tool)),
     ...(builtInMcp(options) ? [mcpCommand(options)] : []),
   ];
-  const words = commandWords(options);
-  const repeated = words.find((word, index) => words.indexOf(word) !== index);
-  if (repeated !== undefined) throw new ToolDefinitionError(`Two commands are named ${repeated}`);
+  const root: Scope = {
+    words: [],
+    title: `${options.description} (${options.name} v${options.version})`,
+    entries: rootEntries(options, commands),
+  };
   const missing = [options.default, options.fallback].find(
-    (name) => name !== undefined && !words.includes(name),
+    (name) => name !== undefined && findCommand(root.entries, name.split(" ")) === undefined,
   );
   if (missing !== undefined)
     throw new ToolDefinitionError(`${options.name}: no command ${missing}`);
 
-  return { run: (argv) => dispatch(options, commands, normalizeArgv(options, argv)) };
+  return { run: (argv) => dispatch(options, root, normalizeArgv(options, argv)) };
 }
 
 /** Flags the root answers itself, so a line that opens with one never reaches `fallback`. */
@@ -1441,50 +1585,70 @@ const ROOT_FLAGS: ReadonlySet<string> = new Set(["--help", "-h", "--version", "-
  */
 export function normalizeArgv(options: CliOptions, argv: readonly string[]): string[] {
   const [first] = argv;
-  if (first === undefined) return options.default === undefined ? [] : [options.default];
+  if (first === undefined) return options.default?.split(" ") ?? [];
   if (
     options.fallback === undefined ||
     ROOT_FLAGS.has(first) ||
-    commandWords(options).includes(first)
+    leadWords(options).includes(first)
   ) {
     return [...argv];
   }
-  return [options.fallback, ...argv];
+  return [...options.fallback.split(" "), ...argv];
 }
 
 /**
- * Picks the command by its first word and runs it. `--help` and `-h` count
- * only where the parse finds an option: after `--` or as an option's value
- * they are the tool's words. Every error line goes through
- * {@link sanitizeLine}, an unknown word inside `JSON.stringify`.
+ * Answers `--version` at the root, then hands the words to {@link dispatchIn}.
+ * Every error line goes through {@link sanitizeLine}, an unknown word inside
+ * `JSON.stringify`.
  *
  * @param options - CLI options.
- * @param commands - The commands.
+ * @param root - The root level.
  * @param argv - Words after {@link normalizeArgv}.
  */
-async function dispatch(
+async function dispatch(options: CliOptions, root: Scope, argv: readonly string[]): Promise<void> {
+  const [first] = argv;
+  if (argv.length === 1 && (first === "--version" || first === "-v")) {
+    writeLine("stdout", sanitizeLine(options.version));
+  } else {
+    await dispatchIn(options, root, argv);
+  }
+}
+
+/**
+ * Picks the entry by the next word: a group takes the word after it, a command
+ * runs on the rest. `--help` and `-h` count only where the parse finds an
+ * option: after `--` or as an option's value they are the tool's words. No
+ * word at all prints the usage of the level on stderr and fails.
+ *
+ * @param options - CLI options.
+ * @param scope - The level the words start at.
+ * @param argv - Words left on the line.
+ */
+async function dispatchIn(
   options: CliOptions,
-  commands: readonly Command[],
+  scope: Scope,
   argv: readonly string[],
 ): Promise<void> {
   const [first, ...rest] = argv;
-  if (argv.length === 1 && (first === "--version" || first === "-v")) {
-    writeLine("stdout", sanitizeLine(options.version));
-  } else if (first === "--help" || first === "-h") {
-    writeLine("stdout", sanitizeText(mainUsage(options, commands)));
-  } else if (first === undefined) {
-    writeLine("stderr", sanitizeText(mainUsage(options, commands)));
+  if (first === undefined) {
+    writeLine("stderr", sanitizeText(scopeUsage(options, scope)));
     fail(["No command specified"]);
+    return;
+  }
+  if (first === "--help" || first === "-h") {
+    writeLine("stdout", sanitizeText(scopeUsage(options, scope)));
+    return;
+  }
+  const entry = findEntry(scope.entries, first);
+  if (entry === undefined) {
+    fail([
+      `Unknown command ${JSON.stringify([...scope.words, first].join(" "))}`,
+      `Run ${scopePath(options, scope)} --help for the commands`,
+    ]);
+  } else if ("scope" in entry) {
+    await dispatchIn(options, entry.scope, rest);
   } else {
-    const command = commands.find((each) => each.name === first || each.aliases.includes(first));
-    if (command === undefined) {
-      fail([
-        `Unknown command ${JSON.stringify(first)}`,
-        `Run ${options.name} --help for the commands`,
-      ]);
-    } else {
-      await runCommand(options, command, rest);
-    }
+    await runCommand(options, entry, rest);
   }
 }
 
@@ -1522,22 +1686,32 @@ function table(rows: readonly (readonly [string, string])[]): string[] {
 
 /**
  * @param options - CLI options.
- * @param commands - The commands.
- * @returns {string} The usage text of the CLI.
+ * @param scope - A level of the command line.
+ * @returns {string} The executable and the words that reach it.
  */
-function mainUsage(options: CliOptions, commands: readonly Command[]): string {
+function scopePath(options: CliOptions, scope: Scope): string {
+  return [options.name, ...scope.words].join(" ");
+}
+
+/**
+ * @param options - CLI options.
+ * @param scope - The root or a group.
+ * @returns {string} Its usage text: what it holds, a group with a line of its own.
+ */
+function scopeUsage(options: CliOptions, scope: Scope): string {
+  const path = scopePath(options, scope);
   return [
-    `${options.description} (${options.name} v${options.version})`,
+    scope.title,
     "",
-    `USAGE ${options.name} <command> [OPTIONS]`,
+    `USAGE ${path} <command> [OPTIONS]`,
     "",
     "COMMANDS",
     "",
     ...table(
-      commands.map((command) => [[command.name, ...command.aliases].join(", "), command.summary]),
+      scope.entries.map((entry) => [[entry.word, ...entry.aliases].join(", "), entry.summary]),
     ),
     "",
-    `Use ${options.name} <command> --help for more information about a command.`,
+    `Use ${path} <command> --help for more information about a command.`,
   ].join("\n");
 }
 
