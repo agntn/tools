@@ -9,10 +9,13 @@ import {
   callAsking,
   canAsk,
   listTools,
+  mcpHost,
   progressSteps,
   questionRound,
   type QuestionRound,
 } from "./mcp-answers.ts";
+
+export type { McpHost } from "./mcp-answers.ts";
 
 /** An h3-mcp tool whose `inputSchema` is the plain JSON Schema `tools/list` sends. */
 export type H3Tool = H3ToolDefinition<JsonSchema>;
@@ -26,6 +29,8 @@ export type H3Tool = H3ToolDefinition<JsonSchema>;
  * Schema, which h3-mcp passes through without validating; the core validates
  * instead. An unknown name never reaches a handler: h3-mcp answers it itself
  * with a JSON-RPC error.
+ *
+ * `host` is an {@link McpHost} with the event's request and the call's raw `_meta`.
  *
  * `ask` reaches a client with `elicitation` on the 2026 revision only: h3-mcp has no 2025 shim.
  *
@@ -56,6 +61,7 @@ export function toH3Tools(
       const progress = mcp?.progressToken === undefined ? undefined : mcp.progress;
       const context: ToolCallContext = {
         signal: mcp?.signal,
+        ...mcpHost({ request: event.req, meta: mcp?.meta }),
         ...(progress === undefined ? {} : { progress: numbered(progress) }),
       };
       return await callAsking(info, tools, entry.name, args, context, round);

@@ -16,7 +16,7 @@ export default defineConfig({
         "error",
         {
           allow: [
-            /* These carry TypeBox schemas and a signal; no adapter writes to them. */
+            /* These carry TypeBox schemas, a signal or a request; no adapter writes to them. */
             {
               from: "file",
               name: [
@@ -41,7 +41,7 @@ export default defineConfig({
               name: ["ExtensionAPI", "ExtensionContext"],
               package: "@earendil-works/pi-coding-agent",
             },
-            { from: "lib", name: "AbortSignal" },
+            { from: "lib", name: ["AbortSignal", "Request"] },
           ],
           ignoreInferredTypes: true,
         },

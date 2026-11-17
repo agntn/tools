@@ -10,6 +10,7 @@ import {
   canAsk,
   copyIcons,
   listTools,
+  mcpHost,
   progressSteps,
   questionRound,
   type McpServerInfo,
@@ -21,6 +22,7 @@ export {
   errorResult,
   listTools,
   toolAnnotations,
+  type McpHost,
   type McpServerInfo,
 } from "./mcp-answers.ts";
 
@@ -42,6 +44,8 @@ export {
  *
  * A client that declares `elicitation` gets `ask`, through `input_required` on both revisions.
  * A 2026 request carries its capabilities itself, a 2025 one declared them at `initialize`.
+ *
+ * `host` is an {@link McpHost}: the HTTP request on an HTTP transport, the call's `_meta` on any.
  *
  * @param info - Name, version and optional title, description, icons and website, sent as given.
  * @param tools - Tools to serve.
@@ -65,7 +69,8 @@ export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinit
 
   server.setRequestHandler("tools/list", () => ({ tools: listTools(tools) }));
   server.setRequestHandler("tools/call", async (request, ctx) => {
-    const progressToken = ctx.mcpReq._meta?.progressToken;
+    const meta = ctx.mcpReq._meta;
+    const progressToken = meta?.progressToken;
     const notify = (params: ProgressParams): void => {
       ctx.mcpReq
         .notify({ method: "notifications/progress", params: { progressToken, ...params } })
@@ -81,6 +86,7 @@ export function createMcpServer(info: McpServerInfo, tools: readonly ToolDefinit
       : undefined;
     const context = {
       signal: ctx.mcpReq.signal,
+      ...mcpHost({ request: ctx.http?.req, meta }),
       ...(progressToken === undefined ? {} : { progress: progressSteps(notify) }),
     };
     const { name, arguments: args } = request.params;

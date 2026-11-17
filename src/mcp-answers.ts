@@ -42,6 +42,32 @@ export interface McpServerInfo {
   readonly websiteUrl?: string;
 }
 
+/** What a tool finds in `host` over MCP. The client wrote all of it, so none of it is proof. */
+export interface McpHost {
+  readonly mcp: true;
+  /** The HTTP request behind the call, headers included. Absent over stdio. */
+  readonly request?: Request;
+  /** The call's `_meta` as the transport hands it over, such as a harness's session id. */
+  readonly meta?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The `host` of one MCP call, left out when the call brought neither a request nor `_meta`.
+ *
+ * @param from - The transport's HTTP request and the call's `_meta`, whichever it has.
+ * @returns {Pick<ToolCallContext, "host">} The `host` to spread into the call context.
+ */
+export function mcpHost(from: Omit<McpHost, "mcp">): Pick<ToolCallContext, "host"> {
+  const { request, meta } = from;
+  if (request === undefined && meta === undefined) return {};
+  const host: McpHost = {
+    mcp: true,
+    ...(request === undefined ? {} : { request }),
+    ...(meta === undefined ? {} : { meta }),
+  };
+  return { host };
+}
+
 /**
  * Maps a tool's title and declared effect to MCP annotations. Claude Code reads its label here.
  * A process the tool starts can delete anything, so `exec` counts as destructive.
