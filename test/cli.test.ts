@@ -36,6 +36,7 @@ const options: CliOptions = {
 
 const fixture = fileURLToPath(new URL("fixtures/demo-cli.ts", import.meta.url));
 const plainFixture = fileURLToPath(new URL("fixtures/plain-cli.ts", import.meta.url));
+const hostFixture = fileURLToPath(new URL("fixtures/host-cli.ts", import.meta.url));
 const serverInfoFixture = fileURLToPath(new URL("fixtures/server-info-cli.ts", import.meta.url));
 
 afterEach(() => {
@@ -1527,6 +1528,32 @@ describe("CLI process", () => {
         version: "1.2.3",
         description: "Demo tools",
       });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("finds no request over stdio, only the _meta a call brought along", async () => {
+    const client = new Client({ name: "test", version: "0" });
+    await client.connect(
+      new StdioClientTransport({ command: process.execPath, args: [hostFixture, "mcp"] }),
+    );
+    try {
+      const bare = await client.callTool({ name: "demo_host", arguments: {} });
+      expect(bare.content).toEqual([
+        { type: "text", text: '{"host":false,"request":false,"meta":null}' },
+      ]);
+      const tagged = await client.callTool({
+        name: "demo_host",
+        arguments: {},
+        _meta: { "ai.opencode/sessionID": "ses_meta" },
+      });
+      expect(tagged.content).toEqual([
+        {
+          type: "text",
+          text: '{"host":true,"request":false,"meta":{"ai.opencode/sessionID":"ses_meta"}}',
+        },
+      ]);
     } finally {
       await client.close();
     }

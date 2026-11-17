@@ -13,6 +13,7 @@ import type {
 import type { ExtensionAPI, ToolDefinition as OmpToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { asSchema, generateText, isStepCount, type Tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
+import { createMcpHandler } from "@modelcontextprotocol/server";
 import { H3 } from "h3";
 import { defineMcpHandler } from "h3-mcp";
 import { Client as SdkV1Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -48,7 +49,7 @@ import {
   type ToolResult,
 } from "../src/index.ts";
 import { toH3Tools } from "../src/h3.ts";
-import { callTool, createMcpServer, listTools } from "../src/mcp.ts";
+import { callTool, createMcpServer, listTools, type McpHost } from "../src/mcp.ts";
 import { callAsking, canAsk, questionRound } from "../src/mcp-answers.ts";
 import { hostAsk, requestedSchema, type HostQuestion } from "../src/questions.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
@@ -665,6 +666,75 @@ describe("host context", () => {
     ];
     expect(JSON.stringify(answers)).not.toContain("host on");
     expect(JSON.stringify(answers).match(/host off/g)).toHaveLength(3);
+  });
+});
+
+/* A Streamable HTTP client whose every request carries `x-session`, on whatever serves `fetch`. */
+async function sessionClient(serve: (request: Request) => Promise<Response>): Promise<Client> {
+  const transport = new StreamableHTTPClientTransport(new URL("http://localhost/mcp"), {
+    fetch: async (input, init) => await serve(new Request(input, init)),
+    requestInit: { headers: { "x-session": "ses_header" } },
+  });
+  const client = new Client({ name: "test", version: "0.0.0" });
+  open.push(client);
+  await client.connect(transport);
+  return client;
+}
+
+/* A `demo_peek` call with a harness key in `_meta`, the way opencode tags its calls. */
+const TAGGED = { "ai.opencode/sessionID": "ses_meta" };
+const taggedPeek = { name: "demo_peek", arguments: {}, _meta: TAGGED };
+
+/* What `demo_peek` found in `host` on its last call. */
+function peeked(): McpHost | undefined {
+  return seenHost as McpHost | undefined;
+}
+
+describe("host context over MCP", () => {
+  it("hands the HTTP request and the call's _meta to a tool behind createMcpServer", async () => {
+    const handler = createMcpHandler(() =>
+      createMcpServer({ name: "demo", version: "0.0.0" }, [peek]),
+    );
+    const client = await sessionClient(async (request) => await handler.fetch(request));
+    await client.callTool(taggedPeek);
+    const host = peeked();
+
+    expect(host?.mcp).toBe(true);
+    expect(host?.request?.headers.get("x-session")).toBe("ses_header");
+    expect(host?.request?.url).toBe("http://localhost/mcp");
+    expect(host?.meta).toEqual(TAGGED);
+  });
+
+  it("hands the event's request and the call's _meta to a tool behind toH3Tools", async () => {
+    const tools = toH3Tools({ name: "demo" }, [peek]);
+    const app = new H3().all("/mcp", defineMcpHandler({ name: "demo", version: "0.0.0", tools }));
+    const client = await sessionClient(async (request) => await app.fetch(request));
+    await client.callTool(taggedPeek);
+    const host = peeked();
+
+    expect(host?.mcp).toBe(true);
+    expect(host?.request?.headers.get("x-session")).toBe("ses_header");
+    expect(host?.meta).toMatchObject(TAGGED);
+  });
+
+  it("finds no request off HTTP, and no host at all once the call has no _meta", async () => {
+    const client = await mcpClient([peek]);
+
+    await client.callTool(taggedPeek);
+    expect(peeked()).toEqual({ mcp: true, meta: TAGGED });
+    seenHost = "untouched";
+    await client.callTool({ name: "demo_peek", arguments: {} });
+    expect(seenHost).toBeUndefined();
+  });
+
+  it("hands the toolkit's _meta over too, and no host for a call without one", async () => {
+    const client = await toolkitClient(toolkitServer([peek]));
+
+    await client.callTool(taggedPeek);
+    expect(peeked()).toEqual({ mcp: true, meta: TAGGED });
+    seenHost = "untouched";
+    await client.callTool({ name: "demo_peek", arguments: {} });
+    expect(seenHost).toBeUndefined();
   });
 });
 

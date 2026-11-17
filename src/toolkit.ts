@@ -5,13 +5,13 @@
 import { z } from "zod";
 
 import { type ToolCallContext, type ToolDefinition } from "./index.ts";
-import { callTool, listTools, progressSteps } from "./mcp-answers.ts";
+import { callTool, listTools, mcpHost, progressSteps } from "./mcp-answers.ts";
 import { hostAsk } from "./questions.ts";
 
 /** The part of the SDK v1 request `extra` a handler reads: abort signal, progress and questions. */
 export interface ToolkitExtra {
   readonly signal?: AbortSignal;
-  readonly _meta?: { readonly progressToken?: string | number };
+  readonly _meta?: { readonly [key: string]: unknown; readonly progressToken?: string | number };
   readonly sendNotification?: (notification: {
     readonly method: "notifications/progress";
     readonly params: {
@@ -45,6 +45,8 @@ export interface ToolkitOptions {
   readonly elicitation?: ToolkitElicitation;
 }
 
+export type { McpHost } from "./mcp-answers.ts";
+
 /** What a handler answers. The toolkit runs SDK v1, so these types never name the v2 package. */
 export interface ToolkitResult {
   [key: string]: unknown;
@@ -72,6 +74,8 @@ export interface ToolkitTool {
 
 /**
  * Turns tools into toolkit entries that list what `listTools` lists and answer via `callTool`.
+ *
+ * `host` is an {@link McpHost} with the call's `_meta` only. SDK v1 has no `Request` to hand over.
  *
  * Progress and questions need the toolkit's sessions: its stateless default answers in plain JSON.
  * `useMcpElicitation` also needs Nitro's `asyncContext`, since it finds the server in the request.
@@ -134,7 +138,8 @@ function missingAsEmpty(run: z.ZodObject["_zod"]["run"]): z.ZodObject["_zod"]["r
 }
 
 /**
- * The abort signal, plus numbered progress for a request with a token. A failed send is dropped.
+ * The abort signal and `_meta` as `host`, plus numbered progress for a request with a token.
+ * A failed send is dropped.
  *
  * @param extra - The SDK's request extra, absent when a caller skips it.
  * @returns {ToolCallContext} Context for `callTool`.
@@ -144,6 +149,7 @@ function callContext(extra: ToolkitExtra | undefined): ToolCallContext {
   const send = extra?.sendNotification;
   return {
     signal: extra?.signal,
+    ...mcpHost({ meta: extra?._meta }),
     ...(progressToken === undefined || send === undefined
       ? {}
       : {
