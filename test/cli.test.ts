@@ -760,6 +760,38 @@ describe("CLI progress", () => {
     });
   });
 
+  it("builds the grapheme segmenter on the first progress line, once", async () => {
+    const original = Intl.Segmenter;
+    let built = 0;
+    class CountedSegmenter extends original {
+      constructor(locales?: string, segmenterOptions?: Readonly<Intl.SegmenterOptions>) {
+        super(locales, segmenterOptions);
+        built += 1;
+      }
+    }
+    Object.defineProperty(Intl, "Segmenter", { value: CountedSegmenter });
+    vi.resetModules();
+    try {
+      const fresh = await import("../src/cli.ts");
+      vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      await fresh.createCli(cli).run(["--help"]);
+      const afterHelp = built;
+      const before = { isTTY: process.stderr.isTTY, columns: process.stderr.columns };
+      Object.assign(process.stderr, { isTTY: true, columns: 80 });
+      try {
+        await fresh.createCli(cli).run(["slow"]);
+        await fresh.createCli(cli).run(["slow"]);
+      } finally {
+        Object.assign(process.stderr, before);
+      }
+      expect({ afterHelp, built }).toEqual({ afterHelp: 0, built: 1 });
+    } finally {
+      Object.defineProperty(Intl, "Segmenter", { value: original });
+      vi.resetModules();
+    }
+  });
+
   it("keeps a pipe to the answer alone", async () => {
     expect(await runOnTerminal(false, ["slow"], cli)).toEqual({
       stdout: "done\n",

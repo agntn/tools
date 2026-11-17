@@ -1213,14 +1213,14 @@ const JSON_FORGING =
   /[\u007F-\u009F\u061C\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u206F]/g;
 
 /** Cuts the progress line between characters a terminal draws, so an emoji stays whole. */
-const GRAPHEMES = new Intl.Segmenter();
+let graphemes: Intl.Segmenter | undefined;
 
 /** Code points a terminal draws two cells wide: emoji and the East Asian wide blocks. */
 const WIDE =
   /^(?:\p{Extended_Pictographic}|[\u1100-\u115F\u231A\u231B\u2329\u232A\u2630-\u2637\u268A-\u268F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DFF\u4E00-\u9FFF\uA000-\uA4CF\uA960-\uA97F\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6\u{16FE0}-\u{18DFF}\u{1AFF0}-\u{1B2FF}\u{1D15E}-\u{1D164}\u{1D1BB}-\u{1D1C0}\u{1D300}-\u{1D376}\u{1F000}-\u{1FAFF}\u{20000}-\u{3FFFD}])$/u;
 
 /** Emoji a terminal draws two cells wide whatever their code points add up to, as `1️⃣`. */
-const EMOJI = /^\p{RGI_Emoji}$/v;
+let emoji: RegExp | undefined;
 
 /** Marks that sit on the character before them and take no cell of their own. */
 const ZERO_WIDTH = /^[\p{Mn}\p{Me}]$/u;
@@ -1241,7 +1241,8 @@ function pointCells(point: string): number {
 function graphemeCells(grapheme: string): number {
   let size = 0;
   for (const point of grapheme.normalize("NFC")) size += pointCells(point);
-  return Math.max(EMOJI.test(grapheme) ? 2 : 1, size);
+  emoji ??= /^\p{RGI_Emoji}$/v;
+  return Math.max(emoji.test(grapheme) ? 2 : 1, size);
 }
 
 /**
@@ -1254,7 +1255,8 @@ function graphemeCells(grapheme: string): number {
 function fitLine(text: string, room: number): { text: string; cells: number } {
   let fitted = "";
   let used = 0;
-  for (const { segment } of GRAPHEMES.segment(text)) {
+  graphemes ??= new Intl.Segmenter();
+  for (const { segment } of graphemes.segment(text)) {
     const size = graphemeCells(segment);
     if (used + size > room) break;
     fitted += segment;
