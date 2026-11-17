@@ -18,7 +18,9 @@ import { H3 } from "h3";
 import { defineMcpHandler } from "h3-mcp";
 import { Client as SdkV1Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport as SdkV1Transport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { StreamableHTTPClientTransport as SdkV1HttpClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import {
   ElicitRequestSchema,
@@ -724,6 +726,48 @@ describe("host context over MCP", () => {
     expect(peeked()).toEqual({ mcp: true, meta: TAGGED });
     seenHost = "untouched";
     await client.callTool({ name: "demo_peek", arguments: {} });
+    expect(seenHost).toBeUndefined();
+  });
+
+  it("rebuilds the request for a tool behind toToolkitTools from SDK v1's requestInfo", async () => {
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: () => "ses_transport",
+    });
+    const server = toolkitServer([peek]);
+    open.push(server);
+    await server.connect(transport);
+    const client = new SdkV1Client({ name: "test", version: "0.0.0" });
+    open.push(client);
+    await client.connect(
+      new SdkV1HttpClientTransport(new URL("http://localhost/mcp"), {
+        fetch: async (input, init) => await transport.handleRequest(new Request(input, init)),
+        requestInit: { headers: { "x-session": "ses_header" } },
+      }),
+    );
+    await client.callTool(taggedPeek);
+    const host = peeked();
+
+    expect(host?.mcp).toBe(true);
+    expect(host?.request?.headers.get("x-session")).toBe("ses_header");
+    expect(host?.request?.url).toBe("http://localhost/mcp");
+    expect(host?.request?.body).toBeNull();
+    expect(host?.meta).toEqual(TAGGED);
+  });
+
+  it("joins a repeated header, skips a name Headers refuses, and needs a usable URL", async () => {
+    const [tool] = toToolkitTools({ name: "demo" }, [peek]);
+    const headers = { accept: ["a/b", "c/d"], ":path": "/mcp", "x-gone": undefined, "x-ok": "1" };
+
+    await tool?.handler({}, { requestInfo: { headers, url: new URL("http://localhost/mcp") } });
+    expect([...(peeked()?.request?.headers ?? [])]).toEqual([
+      ["accept", "a/b, c/d"],
+      ["x-ok", "1"],
+    ]);
+    seenHost = "untouched";
+    await tool?.handler({}, { requestInfo: { headers } });
+    expect(seenHost).toBeUndefined();
+    seenHost = "untouched";
+    await tool?.handler({}, { requestInfo: { headers, url: new URL("http://u:p@localhost/") } });
     expect(seenHost).toBeUndefined();
   });
 
