@@ -8,9 +8,17 @@ import { type ToolCallContext, type ToolDefinition } from "./index.ts";
 import { callTool, listTools, mcpHost, progressSteps } from "./mcp-answers.ts";
 import { hostAsk } from "./questions.ts";
 
+/** What SDK v1 keeps of the HTTP request. */
+export interface ToolkitRequestInfo {
+  readonly headers: Readonly<Record<string, string | readonly string[] | undefined>>;
+  readonly url?: { readonly href: string };
+}
+
 /** The part of the SDK v1 request `extra` a handler reads: abort signal, progress and questions. */
 export interface ToolkitExtra {
   readonly signal?: AbortSignal;
+  /** Present on an HTTP transport. */
+  readonly requestInfo?: ToolkitRequestInfo;
   readonly _meta?: { readonly [key: string]: unknown; readonly progressToken?: string | number };
   readonly sendNotification?: (notification: {
     readonly method: "notifications/progress";
@@ -75,7 +83,8 @@ export interface ToolkitTool {
 /**
  * Turns tools into toolkit entries that list what `listTools` lists and answer via `callTool`.
  *
- * `host` is an {@link McpHost} with the call's `_meta` only. SDK v1 has no `Request` to hand over.
+ * `host` is an {@link McpHost} with the call's `_meta` and a `Request` rebuilt from SDK v1's
+ * `requestInfo`: the caller's URL and headers, but no body and always `GET`.
  *
  * Progress and questions need the toolkit's sessions: its stateless default answers in plain JSON.
  * `useMcpElicitation` also needs Nitro's `asyncContext`, since it finds the server in the request.
@@ -138,8 +147,8 @@ function missingAsEmpty(run: z.ZodObject["_zod"]["run"]): z.ZodObject["_zod"]["r
 }
 
 /**
- * The abort signal and `_meta` as `host`, plus numbered progress for a request with a token.
- * A failed send is dropped.
+ * The abort signal, request and `_meta` as `host`, plus numbered progress for a request with a
+ * token. A failed send is dropped.
  *
  * @param extra - The SDK's request extra, absent when a caller skips it.
  * @returns {ToolCallContext} Context for `callTool`.
@@ -149,7 +158,7 @@ function callContext(extra: ToolkitExtra | undefined): ToolCallContext {
   const send = extra?.sendNotification;
   return {
     signal: extra?.signal,
-    ...mcpHost({ meta: extra?._meta }),
+    ...mcpHost({ request: rebuiltRequest(extra?.requestInfo), meta: extra?._meta }),
     ...(progressToken === undefined || send === undefined
       ? {}
       : {
@@ -160,6 +169,42 @@ function callContext(extra: ToolkitExtra | undefined): ToolCallContext {
           }),
         }),
   };
+}
+
+/**
+ * A bodiless `Request` from the URL and headers SDK v1 kept.
+ *
+ * @param info - The SDK's `requestInfo`.
+ * @returns {Request | undefined} Nothing without a usable URL.
+ */
+function rebuiltRequest(info: ToolkitRequestInfo | undefined): Request | undefined {
+  if (info?.url === undefined) return undefined;
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(info.headers)) {
+    for (const item of [value ?? []].flat()) {
+      if (isHeader(name, item)) headers.append(name, item);
+    }
+  }
+  try {
+    return new Request(info.url.href, { headers });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether `Headers` takes the pair. It refuses HTTP/2's `:path`.
+ *
+ * @param name - Header name.
+ * @param value - Header value.
+ * @returns {boolean} False when `append` would throw.
+ */
+function isHeader(name: string, value: string): boolean {
+  try {
+    return new Headers([[name, value]]).has(name);
+  } catch {
+    return false;
+  }
 }
 
 /**
