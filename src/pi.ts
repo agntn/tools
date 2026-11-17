@@ -13,6 +13,7 @@ import type {
   ToolDefinition as PiToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
+import { throwWithCauses } from "./causes.ts";
 import { sanitizeText } from "./escapes.ts";
 import {
   indexTools,
@@ -110,7 +111,8 @@ export function registerPiTools(
       parameters: tool.input,
       async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<unknown>> {
         if (ask) await approve(tool, ask, params, signal, ctx);
-        const result = await invokeTool(tool, params, hostContext(signal, onUpdate, ctx));
+        const context = hostContext(signal, onUpdate, ctx);
+        const result = await invokeTool(tool, params, context).catch(throwWithCauses);
         if (result.isError && failures === "throw") throw new Error(resultText(result));
         return result;
       },

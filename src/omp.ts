@@ -15,6 +15,7 @@ import type {
   ToolRenderResultOptions,
 } from "@oh-my-pi/pi-coding-agent";
 
+import { throwWithCauses } from "./causes.ts";
 import {
   indexTools,
   invokeTool,
@@ -105,8 +106,9 @@ export function registerOmpTools(
       loadMode: options.loadMode,
       strict: false,
       async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<unknown>> {
+        const context = hostContext(signal, onUpdate, ctx);
         // Returned as is: OMP reads `isError` from the object (`explicitError`).
-        return await invokeTool(tool, params, hostContext(signal, onUpdate, ctx));
+        return await invokeTool(tool, params, context).catch(throwWithCauses);
       },
       renderCall(args, renderOptions, theme): Component {
         if (renderers?.renderCall) return renderers.renderCall(args, renderOptions, theme);
