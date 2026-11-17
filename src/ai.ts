@@ -8,6 +8,7 @@
 import { jsonSchema, tool, type JSONValue, type Tool } from "ai";
 import type { Static, TObject } from "typebox";
 
+import { throwWithCauses } from "./causes.ts";
 import {
   indexTools,
   invokeTool,
@@ -62,11 +63,8 @@ export function toAiTool<Input extends TObject, Details>(
       },
     }),
     async execute(input, { abortSignal }): Promise<object> {
-      const result = await invokeTool(
-        definition,
-        input,
-        abortSignal ? { signal: abortSignal } : {},
-      );
+      const context = abortSignal ? { signal: abortSignal } : {};
+      const result = await invokeTool(definition, input, context).catch(throwWithCauses);
       const text = resultText(result);
       if (result.isError) throw new Error(text);
       return aiOutput(definition.name, result, text);

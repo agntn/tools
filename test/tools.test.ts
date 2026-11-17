@@ -27,6 +27,7 @@ import { afterEach, describe, expect, expectTypeOf, it } from "vite-plus/test";
 import type { z } from "zod";
 
 import { toAiTool, toAiTools, type AiToolOutput } from "../src/ai.ts";
+import { throwWithCauses } from "../src/causes.ts";
 import { ESCAPE_SEQUENCE, stripEscapes } from "../src/escapes.ts";
 import {
   defineTool,
@@ -110,6 +111,33 @@ const count = defineTool({
     };
   },
 });
+
+/* A second provider's failure on top, the first one's kept as its cause, key still in the URL. */
+const fallback = defineTool({
+  name: "demo_fallback",
+  title: "Demo Fallback",
+  description: "Fail on the second provider.",
+  effect: "read",
+  input: Type.Object({ cause: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+  execute({ cause }): ToolResult<null> {
+    if (cause === false) throw new Error("Rate limited by b");
+    const first = new Error("HTTP 502 from https://a.example/v3/s3cret");
+    throw new Error("Rate limited by b", { cause: first });
+  },
+});
+
+/* What a model reads under the message of `fallback`, on every host. */
+const CAUSE_LINE = "caused by: HTTP 502 from https://a.example/REDACTED";
+
+/* Whatever a call rejects with, so a test can read the message and what it kept. */
+async function rejection(call: () => unknown): Promise<unknown> {
+  try {
+    await call();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("the call did not reject");
+}
 
 describe("defineTool", () => {
   it("rejects an open object schema", () => {
@@ -519,6 +547,27 @@ const slow = defineTool({
       details: null,
     };
   },
+});
+
+describe("cause lines for a host that reads only the message", () => {
+  it("keeps the error's name, and rethrows as is what has no cause line to add", async () => {
+    const refused = new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED") });
+    const shown = await rejection(() => throwWithCauses(refused));
+    expect(shown).toMatchObject({
+      name: "TypeError",
+      message: "fetch failed\ncaused by: connect ECONNREFUSED",
+    });
+    expect((shown as Error).cause).toBe(refused);
+
+    const quoted = new Error("no response: ETIMEDOUT", { cause: new Error("ETIMEDOUT") });
+    expect(await rejection(() => throwWithCauses(quoted))).toBe(quoted);
+    expect(await rejection(() => throwWithCauses("just a string"))).toBe("just a string");
+
+    const input = Object.assign(new ToolInputError(["Invalid arguments: missing key"]), {
+      cause: new Error("schema detail"),
+    });
+    expect(await rejection(() => throwWithCauses(input))).toBe(input);
+  });
 });
 
 describe("progress", () => {
@@ -938,6 +987,12 @@ describe("MCP adapter", () => {
 
       const long = await answer(new Error("top", { cause: new Error(`x\n${"y".repeat(400)}`) }));
       expect(long?.split("\n")[1]).toBe(`caused by: x ${"y".repeat(298)}...`);
+    });
+
+    it("answers the shared fallback with the line every other host shows", async () => {
+      expect(firstText(await callTool({ name: "demo" }, [fallback], "demo_fallback"))).toBe(
+        `demo_fallback failed: Rate limited by b\n${CAUSE_LINE}`,
+      );
     });
 
     it("reads through what fetch throws: an empty AggregateError, then the attempt", async () => {
@@ -1547,6 +1602,20 @@ describe("AI SDK adapter", () => {
     });
   });
 
+  it("throws the cause lines MCP shows, with the thrown error kept as the cause", async () => {
+    const tool = toAiTool(fallback);
+    if (!tool.execute) throw new Error("tool not executable");
+    const options = { toolCallId: "1", messages: [], context: {} };
+
+    const shown = await rejection(async () => await tool.execute?.({}, options));
+    expect(shown).toMatchObject({ message: `Rate limited by b\n${CAUSE_LINE}`, name: "Error" });
+    expect((shown as Error).cause).toMatchObject({ message: "Rate limited by b" });
+
+    const plain = await rejection(async () => await tool.execute?.({ cause: false }, options));
+    expect(plain).toMatchObject({ message: "Rate limited by b" });
+    expect((plain as Error).cause).toBeUndefined();
+  });
+
   it.each(["text", "images"])(
     "refuses details with their own %s field instead of overwriting it",
     async (field) => {
@@ -1678,6 +1747,29 @@ describe("OMP adapter", () => {
         details: {},
       })),
     );
+  });
+
+  it("throws the cause lines MCP shows, with the thrown error kept as the cause", async () => {
+    const registered: OmpToolDefinition[] = [];
+    const pi = {
+      typebox: { Type: { Unsafe: (document: unknown) => document } },
+      registerTool: (definition: OmpToolDefinition) => registered.push(definition),
+    };
+    registerOmpTools(pi as unknown as ExtensionAPI, [fallback], {
+      Text: class {} as unknown as OmpToolOptions["Text"],
+    });
+    const [tool] = registered;
+    if (!tool) throw new Error("demo_fallback not registered");
+    const call = async (args: Readonly<Record<string, unknown>>): Promise<unknown> =>
+      await rejection(
+        async () => await tool.execute("call-1", args, undefined, undefined, {} as never),
+      );
+
+    const shown = await call({});
+    expect(shown).toMatchObject({ message: `Rate limited by b\n${CAUSE_LINE}`, name: "Error" });
+    expect((shown as Error).cause).toMatchObject({ message: "Rate limited by b" });
+    expect(await call({ cause: false })).toMatchObject({ message: "Rate limited by b" });
+    expect(await call({ cause: "yes" })).toBeInstanceOf(ToolInputError);
   });
 
   it("lets a renderCall of the same tool win over describeCall", () => {
@@ -1905,6 +1997,24 @@ describe("Pi adapter", () => {
       },
     };
     await expect(call(ask, { word: "hi" }, ctx, controller.signal)).rejects.toThrow("call aborted");
+  });
+
+  it("throws the cause lines MCP shows, with the thrown error kept as the cause", async () => {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [fallback]);
+    const [tool] = registered;
+    if (!tool) throw new Error("demo_fallback not registered");
+    const call = async (args: Readonly<Record<string, unknown>>): Promise<unknown> =>
+      await rejection(
+        async () => await tool.execute("call-1", args, undefined, undefined, {} as never),
+      );
+
+    const shown = await call({});
+    expect(shown).toMatchObject({ message: `Rate limited by b\n${CAUSE_LINE}`, name: "Error" });
+    expect((shown as Error).cause).toMatchObject({ message: "Rate limited by b" });
+    expect(await call({ cause: false })).toMatchObject({ message: "Rate limited by b" });
+    expect(await call({ cause: "yes" })).toBeInstanceOf(ToolInputError);
   });
 
   it("streams each progress line through onUpdate, and none without it", async () => {
