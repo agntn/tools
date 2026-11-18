@@ -58,8 +58,8 @@ export interface CliOptions {
   /** Adds `mcp` over stdio, named by the CLI on `true` or by the server info it's handed. */
   readonly mcp?: boolean | McpServerInfo;
   /**
-   * Errors the package throws on purpose. They print as one line with exit
-   * code 1; any other error keeps its stack trace.
+   * Errors the package throws on purpose. They print as one line with a `caused by:`
+   * line per cause and exit code 1; any other error keeps its stack trace.
    */
   readonly expected?: (error: unknown) => boolean;
 }
@@ -1173,14 +1173,16 @@ function fail(lines: readonly string[]): void {
 
 /**
  * Turns expected errors into {@link fail}; any other error goes on with its stack.
+ * The causes module loads only on a failure.
  *
  * @param options - CLI options.
  * @param error - What the command threw.
  */
-function handleError(options: CliOptions, error: unknown): void {
+async function handleError(options: CliOptions, error: unknown): Promise<void> {
   if (error instanceof ToolInputError) fail(error.lines);
   else if (options.expected?.(error) === true) {
-    fail([error instanceof Error ? error.message : String(error)]);
+    const { causeLines } = await import("./causes.ts");
+    fail([error instanceof Error ? error.message : String(error), ...causeLines(error)]);
   } else throw error;
 }
 
@@ -1673,7 +1675,7 @@ async function runCommand(
     if (words.errors.length > 0) throw new ToolInputError(words.errors);
     await command.run(words);
   } catch (error) {
-    handleError(options, error);
+    await handleError(options, error);
   }
 }
 

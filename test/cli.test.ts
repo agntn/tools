@@ -583,6 +583,28 @@ describe("CLI commands", () => {
     await expect(run(["echo", "boom"])).rejects.toThrow("exploded");
   });
 
+  it("prints the scrubbed causes under an expected error, with --json too", async () => {
+    const fallback = defineTool({
+      name: "demo_fallback",
+      title: "Fallback",
+      description: "Fail on the second provider.",
+      effect: "read",
+      input: Type.Object({}),
+      execute() {
+        const first = new Error("HTTP 502 from https://a.example/v3/s3cret");
+        throw new DemoError("Rate limited\nby b", { cause: first });
+      },
+    });
+    const cli: CliOptions = { ...options, commands: [fallback] };
+    const failure = {
+      stdout: "",
+      stderr: "Rate limited by b\ncaused by: HTTP 502 from https://a.example/REDACTED\n",
+      exitCode: 1,
+    };
+    expect(await run(["fallback"], cli)).toEqual(failure);
+    expect(await run(["fallback", "--json"], cli)).toEqual(failure);
+  });
+
   it("strips escape sequences, C1 and bidi controls from the text but keeps its layout", async () => {
     expect((await run(["echo", "escape"])).stdout).toBe(
       `aredb\nnext line\t${String.fromCodePoint(0x1f469, 0x200d, 0x1f4bb)}\n`,
