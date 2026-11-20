@@ -26,7 +26,7 @@ import {
   ElicitRequestSchema,
   type CallToolResult as SdkV1Result,
 } from "@modelcontextprotocol/sdk/types.js";
-import { afterEach, describe, expect, expectTypeOf, it } from "vite-plus/test";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import type { z } from "zod";
 
 import { toAiTool, toAiTools, type AiToolOutput } from "../src/ai.ts";
@@ -2307,6 +2307,99 @@ describe("Pi adapter", () => {
     expect(() => register({ prepareArguments: { demo_ecko: (args) => args } })).toThrow(
       new ToolDefinitionError('prepareArguments names "demo_ecko", which isn\'t in the tool list'),
     );
+  });
+
+  describe("exposure", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    /* What each tool's registration carries, by name. */
+    function reach(options: PiToolOptions = {}): Record<string, unknown> {
+      const registered: PiToolDefinition[] = [];
+      const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+      registerPiTools(pi as unknown as PiExtensionAPI, [echo, count], options);
+      return Object.fromEntries(registered.map((tool) => [tool.name, tool.exposure]));
+    }
+
+    it("leaves Pi's default when nobody picks one", () => {
+      const definition = register({});
+      expect(definition).not.toHaveProperty("exposure");
+      expect(definition).not.toHaveProperty("namespace");
+    });
+
+    it("takes one exposure for every tool, or one per name with a default", () => {
+      expect(reach({ exposure: "deferred" })).toEqual({
+        demo_echo: "deferred",
+        demo_count: "deferred",
+      });
+      expect(reach({ exposure: { default: "codemode", tools: { demo_echo: "direct" } } })).toEqual({
+        demo_echo: "direct",
+        demo_count: "codemode",
+      });
+      expect(reach({ exposure: { tools: { demo_echo: "deferred" } } })).toEqual({
+        demo_echo: "deferred",
+        demo_count: undefined,
+      });
+    });
+
+    it("lets the environment beat the package, and a package variable beat the global one", () => {
+      vi.stubEnv("AGNTN_PI_EXPOSURE", "deferred");
+      expect(reach({ exposure: "direct" })).toEqual({
+        demo_echo: "deferred",
+        demo_count: "deferred",
+      });
+      vi.stubEnv("AGNTN_PI_EXPOSURE_DEMO", "direct");
+      expect(reach()).toEqual({ demo_echo: "direct", demo_count: "direct" });
+      vi.stubEnv("AGNTN_PI_EXPOSURE_DEMO", "");
+      expect(reach()).toEqual({ demo_echo: "deferred", demo_count: "deferred" });
+    });
+
+    it("refuses an exposure Pi doesn't know, wherever it came from", () => {
+      const takes = "takes direct, model-only, codemode, deferred, hidden";
+      expect(() => reach({ exposure: { tools: { demo_echo: "lazy" as never } } })).toThrow(
+        new ToolDefinitionError(`exposure of demo_echo is "lazy"; ${takes}`),
+      );
+      vi.stubEnv("AGNTN_PI_EXPOSURE_DEMO", "Deferred");
+      expect(() => reach()).toThrow(
+        new ToolDefinitionError(`AGNTN_PI_EXPOSURE_DEMO is "Deferred"; ${takes}`),
+      );
+    });
+
+    it("checks the whole option even when no tool would read a value", () => {
+      const takes = "takes direct, model-only, codemode, deferred, hidden";
+      const pi = { registerTool: () => 0 } as unknown as PiExtensionAPI;
+      expect(() => registerPiTools(pi, [], { exposure: "lazy" as never })).toThrow(
+        new ToolDefinitionError(`exposure is "lazy"; ${takes}`),
+      );
+      const shadowed: PiToolOptions["exposure"] = {
+        default: {} as never,
+        tools: { demo_echo: "direct", demo_count: "direct" },
+      };
+      expect(() => reach({ exposure: shadowed })).toThrow(
+        new ToolDefinitionError(`exposure.default isn't a string; ${takes}`),
+      );
+      vi.stubEnv("AGNTN_PI_EXPOSURE", "lazy");
+      expect(() => registerPiTools(pi, [])).toThrow(
+        new ToolDefinitionError(`AGNTN_PI_EXPOSURE is "lazy"; ${takes}`),
+      );
+    });
+
+    it("refuses an exposure for a tool that isn't in the list", () => {
+      expect(() => reach({ exposure: { tools: { demo_ecko: "direct" } } })).toThrow(
+        new ToolDefinitionError('exposure.tools names "demo_ecko", which isn\'t in the tool list'),
+      );
+    });
+
+    it("hands every tool its own copy of the namespace", () => {
+      const namespace = { name: "demo", description: "Demo tools" };
+      const registered: PiToolDefinition[] = [];
+      const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+      registerPiTools(pi as unknown as PiExtensionAPI, [echo, count], { namespace });
+      const [first, second] = registered;
+      expect(first?.namespace).toEqual(namespace);
+      expect(first?.namespace).not.toBe(second?.namespace);
+    });
   });
 });
 

@@ -56,7 +56,32 @@ export interface PiToolOptions {
   readonly confirm?: Readonly<Record<string, PiConfirm>>;
   /** Pi's argument repair by tool name, run before validation. A name off the list throws. */
   readonly prepareArguments?: Readonly<Record<string, PiPrepareArguments>>;
+  /** How the model reaches the tools, for all or by name. Left out, Pi's `direct`. */
+  readonly exposure?: PiToolExposure | PiExposures;
+  /** Group the tools share, as Pi groups the tools of one MCP server. */
+  readonly namespace?: PiToolNamespace;
 }
+
+/** Pi's `ToolExposure`, spelled out so older Pi types still compile. */
+export type PiToolExposure = "direct" | "model-only" | "codemode" | "deferred" | "hidden";
+
+/** Exposure by tool name, with a fallback for the rest. A name off the list throws. */
+export interface PiExposures {
+  readonly default?: PiToolExposure;
+  readonly tools?: Readonly<Record<string, PiToolExposure>>;
+}
+
+/** Pi's `ToolNamespace`: what `describeNamespace()` and `tool_search` read. */
+export interface PiToolNamespace {
+  readonly name: string;
+  readonly description?: string;
+  readonly instructions?: string;
+}
+
+const EXPOSURES: readonly string[] = ["direct", "model-only", "codemode", "deferred", "hidden"];
+
+/** The user's pick for every package; `AGNTN_PI_EXPOSURE_KEYS` beats it for `keys_*` tools. */
+const EXPOSURE_VARIABLE = "AGNTN_PI_EXPOSURE";
 
 /** Repairs raw model input before validation. Hand back what it doesn't recognise untouched. */
 export type PiPrepareArguments = (args: unknown) => unknown;
@@ -85,9 +110,10 @@ export interface PiRenderers extends Readonly<
  *
  * @param pi - Pi extension API.
  * @param tools - Tools to register.
- * @param options - Failure policy, host `Text`, renderers, questions and argument repairs.
+ * @param options - Failure policy, host `Text`, renderers, questions, repairs and exposure.
  * @throws {ToolDefinitionError} When two tools share a name, a tool has `describeCall` but no
- *   `Text` came with it, or `confirm` or `prepareArguments` names a tool that isn't in the list.
+ *   `Text` came with it, `confirm`, `prepareArguments` or `exposure` names a tool that isn't in
+ *   the list, or an exposure isn't one Pi knows.
  */
 export function registerPiTools(
   pi: ExtensionAPI,
@@ -98,6 +124,8 @@ export function registerPiTools(
   const failures = options.failures ?? "throw";
   refuseStray(names, "confirm", options.confirm);
   refuseStray(names, "prepareArguments", options.prepareArguments);
+  checkOption(names, options.exposure);
+  fromEnvironment(EXPOSURE_VARIABLE);
 
   for (const tool of tools) {
     const renderers = byName(options.renderers, tool.name);
@@ -112,6 +140,7 @@ export function registerPiTools(
       ...(tool.snippet === undefined ? {} : { promptSnippet: tool.snippet }),
       ...(tool.guidelines === undefined ? {} : { promptGuidelines: [...tool.guidelines] }),
       parameters: tool.input,
+      ...reach(tool.name, options),
       async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<unknown>> {
         if (ask) await approve(tool, ask, params, signal, ctx);
         const context = hostContext(signal, onUpdate, ctx);
@@ -172,6 +201,83 @@ function jsonValue(value: unknown, schema: TSchema): unknown {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * @param name - Tool name.
+ * @param options - Adapter options.
+ * @returns {Pick<PiToolDefinition, "exposure" | "namespace">} Only the fields that are set.
+ */
+function reach(
+  name: string,
+  options: PiToolOptions,
+): Pick<PiToolDefinition, "exposure" | "namespace"> {
+  const exposure = exposureOf(name, options.exposure);
+  return {
+    ...(exposure === undefined ? {} : { exposure }),
+    ...(options.namespace === undefined ? {} : { namespace: { ...options.namespace } }),
+  };
+}
+
+/**
+ * The user's environment first, then the package's option.
+ *
+ * @param name - Tool name; the part before its first `_` names the package's variable.
+ * @param option - The `exposure` option.
+ * @returns {PiToolExposure | undefined} The exposure, or `undefined` to leave Pi's default.
+ * @throws {ToolDefinitionError} On a value Pi doesn't know.
+ */
+function exposureOf(
+  name: string,
+  option: PiToolExposure | PiExposures | undefined,
+): PiToolExposure | undefined {
+  const own = `${EXPOSURE_VARIABLE}_${name.split("_", 1)[0]?.toUpperCase() ?? ""}`;
+  const picked =
+    fromEnvironment(own) ??
+    fromEnvironment(EXPOSURE_VARIABLE) ??
+    (typeof option === "object" ? (byName(option.tools, name) ?? option.default) : option);
+  return picked;
+}
+
+/**
+ * Checks every value of the option up front, so an empty tool list can't hide a typo.
+ *
+ * @param names - Names of the registered tools.
+ * @param option - The `exposure` option.
+ * @throws {ToolDefinitionError} On a stray name or a value Pi doesn't know.
+ */
+function checkOption(names: readonly string[], option: PiToolOptions["exposure"]): void {
+  if (typeof option !== "object") {
+    if (option !== undefined) checkExposure(option, "exposure");
+    return;
+  }
+  refuseStray(names, "exposure.tools", option.tools);
+  if (option.default !== undefined) checkExposure(option.default, "exposure.default");
+  for (const [name, value] of Object.entries(option.tools ?? {})) {
+    checkExposure(value, `exposure of ${name}`);
+  }
+}
+
+/**
+ * @param variable - Environment variable name.
+ * @returns {PiToolExposure | undefined} Its exposure; empty or unset reads as none.
+ * @throws {ToolDefinitionError} On a value Pi doesn't know.
+ */
+function fromEnvironment(variable: string): PiToolExposure | undefined {
+  const value = typeof process === "undefined" ? undefined : process.env[variable];
+  return value ? checkExposure(value, variable) : undefined;
+}
+
+/**
+ * @param value - Exposure as written.
+ * @param where - Where it came from, for the message.
+ * @returns {PiToolExposure} The value, once Pi would know it.
+ * @throws {ToolDefinitionError} When it isn't one of Pi's exposures.
+ */
+function checkExposure(value: unknown, where: string): PiToolExposure {
+  if (typeof value === "string" && EXPOSURES.includes(value)) return value as PiToolExposure;
+  const shown = typeof value === "string" ? `is ${JSON.stringify(value)}` : "isn't a string";
+  throw new ToolDefinitionError(`${where} ${shown}; takes ${EXPOSURES.join(", ")}`);
 }
 
 /**
