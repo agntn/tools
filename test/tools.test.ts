@@ -2213,7 +2213,80 @@ describe("Pi adapter", () => {
     ]);
     expect(await run({ id: "grok" })).toEqual([{ type: "text", text: "one grok" }]);
     expect(await run({ id: '["grok",1]' })).toEqual([{ type: "text", text: 'one ["grok",1]' }]);
-    expect(other).not.toHaveProperty("prepareArguments");
+    const plain = { word: "hi" };
+    expect(other?.prepareArguments?.(plain)).toBe(plain);
+  });
+
+  /* Lists, an enum list and a record, the shapes Pi 1.5 wraps or refuses when they come as text. */
+  const tagger = defineTool({
+    name: "demo_tag",
+    title: "Demo Tag",
+    description: "Tag some words.",
+    effect: "read",
+    input: Type.Object(
+      {
+        note: Type.Optional(Type.String()),
+        words: Type.Optional(Type.Array(Type.String())),
+        kinds: Type.Optional(Type.Array(Type.Enum(["assignment", "label"]))),
+        fields: Type.Optional(Type.Record(Type.String(), Type.String())),
+      },
+      { additionalProperties: false },
+    ),
+    execute: (input): ToolResult<null> => ({
+      content: [{ type: "text", text: JSON.stringify(input) }],
+      details: null,
+    }),
+  });
+
+  /* The repair Pi runs on demo_tag, with or without one of the caller's own. */
+  function tagRepair(options: PiToolOptions = {}): (args: unknown) => unknown {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [tagger], options);
+    const prepare = registered[0]?.prepareArguments;
+    if (!prepare) throw new Error("no prepareArguments on demo_tag");
+    return (args) => Reflect.apply(prepare, undefined, [args]);
+  }
+
+  it("parses arrays and objects a model sent as JSON text", () => {
+    const prepare = tagRepair();
+    expect(
+      prepare({
+        words: '["abandon","zoo"]',
+        kinds: ' ["assignment"]',
+        fields: '{"Priority":"Medium"}',
+      }),
+    ).toEqual({
+      words: ["abandon", "zoo"],
+      kinds: ["assignment"],
+      fields: { Priority: "Medium" },
+    });
+  });
+
+  it("leaves text alone unless its parse fits the schema", () => {
+    const prepare = tagRepair();
+    const cases = [
+      { note: '["abandon"]' },
+      { words: '["abandon",7]' },
+      { kinds: '["assignee"]' },
+      { fields: '{"Priority":1}' },
+      { words: "[abandon" },
+      { words: "abandon" },
+      { fields: '["Medium"]' },
+    ];
+    for (const args of cases) expect(prepare(args)).toBe(args);
+    for (const args of [null, "words", ['["abandon"]']]) expect(prepare(args)).toBe(args);
+  });
+
+  it("hands the caller's repair the parsed arguments", () => {
+    const seen: unknown[] = [];
+    const prepare = tagRepair({
+      prepareArguments: {
+        demo_tag: (args) => (seen.push(args), { ...(args as object), note: "x" }),
+      },
+    });
+    expect(prepare({ words: '["zoo"]' })).toEqual({ words: ["zoo"], note: "x" });
+    expect(seen).toEqual([{ words: ["zoo"] }]);
   });
 
   it("still validates what prepareArguments hands back", async () => {

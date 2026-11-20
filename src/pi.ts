@@ -6,6 +6,9 @@
  * `Text`, which the extension passes in.
  */
 
+import type { TSchema } from "typebox";
+import { Value } from "typebox/value";
+
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -99,10 +102,10 @@ export function registerPiTools(
   for (const tool of tools) {
     const renderers = byName(options.renderers, tool.name);
     const ask = byName(options.confirm, tool.name);
-    const prepare = byName(options.prepareArguments, tool.name);
+    const prepare = parseJsonText(tool, byName(options.prepareArguments, tool.name));
     pi.registerTool({
       ...hostRenderers(tool, renderers, options.Text),
-      ...(prepare === undefined ? {} : { prepareArguments: prepare as PiPrepareHook }),
+      prepareArguments: prepare as PiPrepareHook,
       name: tool.name,
       label: tool.title,
       description: tool.description,
@@ -117,6 +120,57 @@ export function registerPiTools(
         return result;
       },
     });
+  }
+}
+
+/**
+ * Parses arrays and objects sent as JSON text before Pi 1.5 wraps or refuses them.
+ *
+ * @param tool - Tool being registered.
+ * @param own - The caller's repair for it, if any.
+ * @returns {PiPrepareArguments} The repair Pi runs before validation.
+ */
+function parseJsonText(
+  tool: ToolDefinition,
+  own: PiPrepareArguments | undefined,
+): PiPrepareArguments {
+  if (own === undefined) return (args) => repairJsonText(tool, args);
+  return (args) => own(repairJsonText(tool, args));
+}
+
+/**
+ * @param tool - Tool whose top-level properties may hold JSON text.
+ * @param args - Raw arguments from the model.
+ * @returns {unknown} A copy with each JSON text its schema accepts parsed, or `args` itself.
+ */
+function repairJsonText(tool: ToolDefinition, args: unknown): unknown {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return args;
+  const raw = args as Readonly<Record<string, unknown>>;
+  let repaired: Record<string, unknown> | undefined;
+  const properties: readonly [string, TSchema][] = Object.entries(tool.input.properties);
+  for (const [key, schema] of properties) {
+    const parsed = Object.hasOwn(raw, key) ? jsonValue(raw[key], schema) : undefined;
+    if (parsed === undefined) continue;
+    repaired ??= { ...raw };
+    repaired[key] = parsed;
+  }
+  return repaired ?? args;
+}
+
+/**
+ * @param value - One argument as the model sent it.
+ * @param schema - Schema of its property.
+ * @returns {unknown} The array or object the text spells, if the schema takes it.
+ */
+function jsonValue(value: unknown, schema: TSchema): unknown {
+  if (typeof value !== "string" || !/^\s*[[{]/.test(value)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "object" && parsed !== null && Value.Check(schema, parsed)
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
