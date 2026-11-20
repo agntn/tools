@@ -2385,6 +2385,19 @@ describe("Pi adapter", () => {
       );
     });
 
+    it("registers nothing when one package variable is wrong", () => {
+      const other = defineTool({ ...echo, name: "other_echo" });
+      const registered: PiToolDefinition[] = [];
+      const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+      vi.stubEnv("AGNTN_PI_EXPOSURE_OTHER", "lazy");
+      expect(() => registerPiTools(pi as unknown as PiExtensionAPI, [echo, other])).toThrow(
+        new ToolDefinitionError(
+          'AGNTN_PI_EXPOSURE_OTHER is "lazy"; takes direct, model-only, codemode, deferred, hidden',
+        ),
+      );
+      expect(registered).toEqual([]);
+    });
+
     it("refuses an exposure for a tool that isn't in the list", () => {
       expect(() => reach({ exposure: { tools: { demo_ecko: "direct" } } })).toThrow(
         new ToolDefinitionError('exposure.tools names "demo_ecko", which isn\'t in the tool list'),

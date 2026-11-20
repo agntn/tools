@@ -126,6 +126,7 @@ export function registerPiTools(
   refuseStray(names, "prepareArguments", options.prepareArguments);
   checkOption(names, options.exposure);
   fromEnvironment(EXPOSURE_VARIABLE);
+  const exposures = new Map(names.map((name) => [name, exposureOf(name, options.exposure)]));
 
   for (const tool of tools) {
     const renderers = byName(options.renderers, tool.name);
@@ -140,7 +141,7 @@ export function registerPiTools(
       ...(tool.snippet === undefined ? {} : { promptSnippet: tool.snippet }),
       ...(tool.guidelines === undefined ? {} : { promptGuidelines: [...tool.guidelines] }),
       parameters: tool.input,
-      ...reach(tool.name, options),
+      ...reach(exposures.get(tool.name), options.namespace),
       async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<unknown>> {
         if (ask) await approve(tool, ask, params, signal, ctx);
         const context = hostContext(signal, onUpdate, ctx);
@@ -204,23 +205,23 @@ function jsonValue(value: unknown, schema: TSchema): unknown {
 }
 
 /**
- * @param name - Tool name.
- * @param options - Adapter options.
+ * @param exposure - The tool's exposure, if anything picked one.
+ * @param namespace - The shared namespace option.
  * @returns {Pick<PiToolDefinition, "exposure" | "namespace">} Only the fields that are set.
  */
 function reach(
-  name: string,
-  options: PiToolOptions,
+  exposure: PiToolExposure | undefined,
+  namespace: PiToolNamespace | undefined,
 ): Pick<PiToolDefinition, "exposure" | "namespace"> {
-  const exposure = exposureOf(name, options.exposure);
   return {
     ...(exposure === undefined ? {} : { exposure }),
-    ...(options.namespace === undefined ? {} : { namespace: { ...options.namespace } }),
+    ...(namespace === undefined ? {} : { namespace: { ...namespace } }),
   };
 }
 
 /**
- * The user's environment first, then the package's option.
+ * The user's environment first, then the package's option. Both variables get checked, so a
+ * bad global value can't hide behind a good package one.
  *
  * @param name - Tool name; the part before its first `_` names the package's variable.
  * @param option - The `exposure` option.
@@ -232,11 +233,12 @@ function exposureOf(
   option: PiToolExposure | PiExposures | undefined,
 ): PiToolExposure | undefined {
   const own = `${EXPOSURE_VARIABLE}_${name.split("_", 1)[0]?.toUpperCase() ?? ""}`;
-  const picked =
+  const global = fromEnvironment(EXPOSURE_VARIABLE);
+  return (
     fromEnvironment(own) ??
-    fromEnvironment(EXPOSURE_VARIABLE) ??
-    (typeof option === "object" ? (byName(option.tools, name) ?? option.default) : option);
-  return picked;
+    global ??
+    (typeof option === "object" ? (byName(option.tools, name) ?? option.default) : option)
+  );
 }
 
 /**
