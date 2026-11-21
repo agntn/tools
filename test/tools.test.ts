@@ -589,6 +589,10 @@ describe("cause lines for a host that reads only the message", () => {
     expect(causeLines(chain("No complete answer came back: fetch failed"))).toEqual([
       "caused by: getaddrinfo ENOTFOUND example.invalid",
     ]);
+    const eof = new Error("read failed", { cause: new Error("EOF") });
+    expect(causeLines(new Error("Unexpected EOF in config", { cause: eof }))).toEqual([
+      "caused by: read failed",
+    ]);
   });
 
   it("matches a cut cause against the full one the message quotes", () => {

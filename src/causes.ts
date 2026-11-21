@@ -37,7 +37,7 @@ export function causeLines(error: unknown): string[] {
  *
  * @param above - The message and every cause above.
  * @param text - This cause's line.
- * @returns {boolean} Whether {@link above} holds it, a cut line by its kept part.
+ * @returns {boolean} Whether {@link above} holds it anywhere, a cut line by its kept part.
  */
 function alreadySaid(above: string, text: string): boolean {
   return above.includes(text.length > CAUSE_LENGTH ? text.slice(0, CAUSE_LENGTH) : text);
