@@ -25,11 +25,22 @@ export function causeLines(error: unknown): string[] {
   for (let depth = 0; depth < CAUSE_DEPTH && level !== undefined && !seen.has(level); depth += 1) {
     seen.add(level);
     const text = causeText(level);
-    if (text !== "" && !above.includes(text)) lines.push(`caused by: ${text}`);
-    if (text !== "") above = text;
+    if (text !== "" && !alreadySaid(above, text)) lines.push(`caused by: ${text}`);
+    if (text !== "") above += `\n${text}`;
     level = nextCause(level);
   }
   return lines;
+}
+
+/**
+ * Said once is enough, however deep the message quotes its chain.
+ *
+ * @param above - The message and every cause above.
+ * @param text - This cause's line.
+ * @returns {boolean} Whether {@link above} holds it, a cut line by its kept part.
+ */
+function alreadySaid(above: string, text: string): boolean {
+  return above.includes(text.length > CAUSE_LENGTH ? text.slice(0, CAUSE_LENGTH) : text);
 }
 
 /**

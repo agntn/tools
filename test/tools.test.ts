@@ -30,7 +30,7 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/tes
 import type { z } from "zod";
 
 import { toAiTool, toAiTools, type AiToolOutput } from "../src/ai.ts";
-import { throwWithCauses } from "../src/causes.ts";
+import { causeLines, throwWithCauses } from "../src/causes.ts";
 import { ESCAPE_SEQUENCE, stripEscapes } from "../src/escapes.ts";
 import {
   defineTool,
@@ -570,6 +570,37 @@ describe("cause lines for a host that reads only the message", () => {
       cause: new Error("schema detail"),
     });
     expect(await rejection(() => throwWithCauses(input))).toBe(input);
+  });
+
+  it("skips a cause anything above it already quotes, not just the level right above", () => {
+    const chain = (top: string): Error =>
+      new Error(top, {
+        cause: new Error("No complete answer came back", {
+          cause: new Error("fetch failed", {
+            cause: new Error("getaddrinfo ENOTFOUND example.invalid"),
+          }),
+        }),
+      });
+    expect(
+      causeLines(
+        chain("No complete answer came back: fetch failed: getaddrinfo ENOTFOUND example.invalid"),
+      ),
+    ).toEqual([]);
+    expect(causeLines(chain("No complete answer came back: fetch failed"))).toEqual([
+      "caused by: getaddrinfo ENOTFOUND example.invalid",
+    ]);
+  });
+
+  it("matches a cut cause against the full one the message quotes", () => {
+    const long = `refused ${"y".repeat(400)}`;
+    expect(causeLines(new Error(`top: ${long}`, { cause: new Error(long) }))).toEqual([]);
+    expect(causeLines(new Error("top", { cause: new Error(long) }))).toEqual([
+      `caused by: refused ${"y".repeat(292)}...`,
+    ]);
+    const redacted = new Error(`refused apiKey="${"s".repeat(1300)}"`);
+    expect(causeLines(new Error("refused by peer", { cause: redacted }))).toEqual([
+      "caused by: refused ...",
+    ]);
   });
 });
 
