@@ -1865,7 +1865,7 @@ describe("OMP adapter", () => {
         theme as never,
         {},
       ) as unknown as Text;
-      return /\[(?<tier>\w+)\]<\/accent>$/u.exec(line.text)?.groups?.tier;
+      return /\[(?<tier>\w+)\]<\/accent>$/mu.exec(line.text)?.groups?.tier;
     });
 
     expect(registered.map((tool) => tool.approval)).toEqual(["read", "write", "write", "exec"]);
@@ -1947,6 +1947,48 @@ describe("OMP adapter", () => {
     expect(calls).toEqual([[{ word: "hi" }, options, "theme"]]);
   });
 
+  /* Draws a finished `demo_echo` row the way OMP asks for it. */
+  function drawAnswer(text: string, expanded: boolean, isError?: boolean): unknown {
+    const theme = {
+      fg: (color: string, line: string) => `<${color}>${line}</${color}>`,
+      styledSymbol: (name: string) => `[${name}]`,
+      format: { bracketLeft: "[", bracketRight: "]" },
+      sep: { dot: " · " },
+    };
+    return register()[0]?.renderResult?.(
+      { content: [{ type: "text", text }], details: {}, isError },
+      { expanded, isPartial: false },
+      theme as never,
+      {},
+    );
+  }
+  const status = "[status.done] <accent>Demo Echo</accent> <accent>[read]</accent>";
+
+  it("shows the answer under the status line", () => {
+    expect(drawAnswer("hi\u001B[2J\r\nthe\u202Ere\n", false)).toEqual({
+      text: `${status}\n<toolOutput>hi</toolOutput>\n<toolOutput>there</toolOutput>`,
+    });
+  });
+
+  it("shows four lines collapsed, counts the rest and shows all of them expanded", () => {
+    const text = ["1", "2", "3", "4", "5", "6"].join("\n");
+    const line = (word: string) => `<toolOutput>${word}</toolOutput>`;
+
+    expect(drawAnswer(text, false)).toEqual({
+      text: [status, ...["1", "2", "3", "4"].map(line), "<dim>… 2 more lines</dim>"].join("\n"),
+    });
+    expect(drawAnswer(text, true)).toEqual({
+      text: [status, ...["1", "2", "3", "4", "5", "6"].map(line)].join("\n"),
+    });
+  });
+
+  it("shows the text of an error and keeps a blank answer to the status line", () => {
+    expect(drawAnswer("no such word", false, true)).toEqual({
+      text: "[status.error] <accent>Demo Echo</accent> <accent>[read]</accent>\n<toolOutput>no such word</toolOutput>",
+    });
+    expect(drawAnswer(" \n\n", false)).toEqual({ text: status });
+  });
+
   it("keeps the spinner and the last line on a partial result", () => {
     const theme = {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
@@ -1965,7 +2007,7 @@ describe("OMP adapter", () => {
 
     expect(draw(true)).toEqual({ text: "\\ <accent>Demo Slow</accent> <dim>halfway</dim>" });
     expect(draw(false)).toEqual({
-      text: "[status.done] <accent>Demo Slow</accent> <accent>[read]</accent>",
+      text: "[status.done] <accent>Demo Slow</accent> <accent>[read]</accent>\n<toolOutput>halfway</toolOutput>",
     });
   });
 });
