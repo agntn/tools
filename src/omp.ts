@@ -16,6 +16,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent";
 
 import { throwWithCauses } from "./causes.ts";
+import { sanitizeText } from "./escapes.ts";
 import {
   indexTools,
   invokeTool,
@@ -43,10 +44,7 @@ export interface OmpRenderers {
   renderCall?: OmpToolDefinition["renderCall"];
   /** Short metadata after the badge, one entry per fact. Each entry is sanitized. */
   describeResult?(result: OmpResultView): readonly unknown[];
-  /**
-   * Replaces the result status line with the package's own component, such as
-   * a bounded preview of long output. It owns sanitizing what it draws.
-   */
+  /** Replaces the status line and the answer under it. It owns sanitizing what it draws. */
   renderResult?: OmpToolDefinition["renderResult"];
 }
 
@@ -58,6 +56,9 @@ export interface OmpToolOptions {
   /** Status-line renderers by tool name. */
   readonly renderers?: Readonly<Record<string, OmpRenderers>>;
 }
+
+/** Answer lines in a collapsed row, as many as OMP's own MCP tools get. */
+const COLLAPSED_LINES = 4;
 
 /** OMP has no destructive tier, and `exec` stays for tools that really start processes. */
 const APPROVAL: Record<ToolEffect, "read" | "write" | "exec"> = {
@@ -125,17 +126,10 @@ export function registerOmpTools(
           return renderers.renderResult(result, renderOptions, theme, args);
         if (renderOptions.isPartial)
           return new Text(progressLine(tool, result, renderOptions, theme), 0, 0);
-        const icon = result.isError
-          ? theme.styledSymbol("status.error", "error")
-          : theme.styledSymbol("status.done", "success");
-        const { bracketLeft, bracketRight } = theme.format;
-        const badge = theme.fg("accent", `${bracketLeft}${APPROVAL[tool.effect]}${bracketRight}`);
         const facts = result.isError ? [] : (renderers?.describeResult?.(result) ?? []);
-        return new Text(
-          `${icon} ${theme.fg("accent", sanitizeLine(tool.title))} ${badge}${dimFacts(facts, theme)}`,
-          0,
-          0,
-        );
+        const status = `${statusLine(tool, result, theme)}${dimFacts(facts, theme)}`;
+        const answer = answerLines(result, renderOptions.expanded, theme);
+        return new Text(answer ? `${status}\n${answer}` : status, 0, 0);
       },
     });
   }
@@ -161,6 +155,48 @@ function progressLine(
   );
   const title = theme.fg("accent", sanitizeLine(tool.title));
   return `${callIcon(options, theme)} ${title}${message ? ` ${theme.fg("dim", message)}` : ""}`;
+}
+
+/**
+ * Status line of a finished call: the icon, the title and the approval badge.
+ *
+ * @param tool - Tool that was called.
+ * @param result - Its result.
+ * @param theme - Host theme.
+ * @returns {string} The styled line, without the facts.
+ */
+function statusLine(tool: ToolDefinition, result: OmpResultView, theme: Theme): string {
+  const icon = result.isError
+    ? theme.styledSymbol("status.error", "error")
+    : theme.styledSymbol("status.done", "success");
+  const { bracketLeft, bracketRight } = theme.format;
+  const badge = theme.fg("accent", `${bracketLeft}${APPROVAL[tool.effect]}${bracketRight}`);
+  return `${icon} ${theme.fg("accent", sanitizeLine(tool.title))} ${badge}`;
+}
+
+/**
+ * What the model got, shown to the person too. Collapsed, it counts what's cut.
+ *
+ * @param result - Text blocks of the result.
+ * @param expanded - Whether the host shows the whole row.
+ * @param theme - Host theme.
+ * @returns {string} The sanitized lines, or nothing for a result without text.
+ */
+function answerLines(
+  result: Readonly<{ content: readonly Readonly<{ type: string; text?: string }>[] }>,
+  expanded: boolean,
+  theme: Theme,
+): string {
+  const text = result.content
+    .flatMap((block) => (block.type === "text" && block.text ? [block.text] : []))
+    .join("\n");
+  const lines = sanitizeText(text).trimEnd().split("\n");
+  if (lines.join("") === "") return "";
+  const shown = expanded ? lines : lines.slice(0, COLLAPSED_LINES);
+  const body = shown.map((line) => theme.fg("toolOutput", line));
+  const hidden = lines.length - shown.length;
+  if (hidden > 0) body.push(theme.fg("dim", `… ${hidden} more lines`));
+  return body.join("\n");
 }
 
 /**
