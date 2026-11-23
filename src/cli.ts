@@ -463,7 +463,10 @@ function fieldDescription(field: Field, values = ""): string {
  */
 function valueHint(field: Field): string {
   if (field.kind === "enum") return (field.schema.enum as string[]).join("|");
-  return field.kind === "string" ? field.flag : field.kind;
+  if (field.kind !== "json") return field.kind === "string" ? field.flag : field.kind;
+  const word = wordBranch(field.schema);
+  if (word === undefined) return "json";
+  return `${valueHint({ ...field, schema: word, kind: fieldKind(word) })}|json`;
 }
 
 /**
@@ -1003,6 +1006,45 @@ function wordValue(schema: SchemaNode, word: string): unknown {
 }
 
 /**
+ * @param schema - Property schema.
+ * @returns {SchemaNode | undefined} The first branch a bare word fills; `null` is JSON already.
+ */
+function wordBranch(schema: SchemaNode): SchemaNode | undefined {
+  return unionBranches(schema).find(
+    (branch) => fieldKind(branch) !== "json" && branch.type !== "null",
+  );
+}
+
+/**
+ * JSON first, so `[]` and `""` stay as quoted; a bare word reads the way a scalar branch takes it.
+ *
+ * @param schema - Schema of an object, an array or a union with one of them.
+ * @param word - The word.
+ * @returns {{ value: unknown } | { error: string }} The value, or why there is none.
+ */
+function jsonValue(schema: SchemaNode, word: string): { value: unknown } | { error: string } {
+  let parsed: { value: unknown } | undefined;
+  try {
+    parsed = { value: JSON.parse(word) as unknown };
+  } catch {
+    parsed = undefined;
+  }
+  if (wordBranch(schema) === undefined) return parsed ?? { error: "must be JSON" };
+  if (parsed !== undefined && (quotedJson(parsed.value) || Value.Check(schema, parsed.value))) {
+    return parsed;
+  }
+  return { value: wordValue(schema, word) };
+}
+
+/**
+ * @param value - A parsed JSON word.
+ * @returns {boolean} Whether it came in quotes or brackets, so the caller meant it as JSON.
+ */
+function quotedJson(value: unknown): boolean {
+  return typeof value === "string" || (typeof value === "object" && value !== null);
+}
+
+/**
  * @param field - Field the word belongs to.
  * @param raw - What {@link parseWords} read for it.
  * @returns {{ value: unknown } | { error: string }} The value, or why there is none.
@@ -1016,19 +1058,15 @@ function fieldValue(field: Field, raw: string | boolean): { value: unknown } | {
   if (field.kind === "number") return numberValue(field.schema.type === "integer", raw);
   if (field.kind === "string") return { value: wordValue(field.schema, raw) };
   if (field.kind !== "json") return { value: raw };
-  try {
-    return { value: JSON.parse(raw) as unknown };
-  } catch {
-    return { error: "must be JSON" };
-  }
+  return jsonValue(field.schema, raw);
 }
 
 /**
  * Builds the tool input from parsed arguments. Numbers are read as decimals,
  * booleans come from the flag, objects and arrays are JSON (a `rest` array
- * takes its words instead), any other word is its first reading the schema
- * accepts, and nothing is bent to fit it: {@link invokeTool} validates as on
- * every surface.
+ * takes its words instead, a union with a scalar a bare word too), any other
+ * word is its first reading the schema accepts, and nothing is bent to fit it:
+ * {@link invokeTool} validates as on every surface.
  *
  * @param fields - The command's fields.
  * @param values - Raw values by property, from {@link parseWords}.
