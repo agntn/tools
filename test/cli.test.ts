@@ -287,7 +287,10 @@ describe("CLI commands", () => {
       effect: "write",
       input: Type.Object(
         {
-          threadId: Type.Union([Type.String(), Type.Array(Type.String(), { minItems: 1 })]),
+          threadId: Type.Union([
+            Type.String({ minLength: 1 }),
+            Type.Array(Type.String(), { minItems: 1 }),
+          ]),
           number: Type.Optional(Type.Union([Type.Integer(), Type.Array(Type.Integer())])),
           mode: Type.Optional(Type.Union([Type.Enum(["all"]), Type.Array(Type.String())])),
           filter: Type.Optional(
@@ -322,6 +325,10 @@ describe("CLI commands", () => {
     expect((await resolved("--thread-id", "[]")).stderr).toContain(
       "Invalid arguments at --thread-id: must not have fewer than 1 items\n",
     );
+    expect((await resolved("--thread-id", '""')).stderr).toContain(
+      "Invalid arguments at --thread-id: must not have fewer than 1 characters\n",
+    );
+    expect((await resolved("--thread-id", '"PRRT_abc"')).stdout).toBe('{"threadId":"PRRT_abc"}\n');
     expect((await resolved("--thread-id", "a", "--number", "1.5")).stderr).toContain(
       "Invalid arguments at --number: must be integer\n",
     );

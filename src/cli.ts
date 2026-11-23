@@ -1016,7 +1016,7 @@ function wordBranch(schema: SchemaNode): SchemaNode | undefined {
 }
 
 /**
- * JSON first, so `[]` stays a list; any other word is read the way a scalar branch takes it.
+ * JSON first, so `[]` and `""` stay as quoted; a bare word reads the way a scalar branch takes it.
  *
  * @param schema - Schema of an object, an array or a union with one of them.
  * @param word - The word.
@@ -1030,10 +1030,18 @@ function jsonValue(schema: SchemaNode, word: string): { value: unknown } | { err
     parsed = undefined;
   }
   if (wordBranch(schema) === undefined) return parsed ?? { error: "must be JSON" };
-  const value = parsed?.value;
-  const structured = typeof value === "object" && value !== null;
-  if (parsed !== undefined && (structured || Value.Check(schema, value))) return parsed;
+  if (parsed !== undefined && (quotedJson(parsed.value) || Value.Check(schema, parsed.value))) {
+    return parsed;
+  }
   return { value: wordValue(schema, word) };
+}
+
+/**
+ * @param value - A parsed JSON word.
+ * @returns {boolean} Whether it came in quotes or brackets, so the caller meant it as JSON.
+ */
+function quotedJson(value: unknown): boolean {
+  return typeof value === "string" || (typeof value === "object" && value !== null);
 }
 
 /**
