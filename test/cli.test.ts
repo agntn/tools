@@ -279,6 +279,64 @@ describe("CLI commands", () => {
     }
   });
 
+  it("reads a bare word for a union of a scalar and a list, and JSON for the list", async () => {
+    const resolve = defineTool({
+      name: "demo_resolve",
+      title: "Resolve",
+      description: "Resolve threads.",
+      effect: "write",
+      input: Type.Object(
+        {
+          threadId: Type.Union([Type.String(), Type.Array(Type.String(), { minItems: 1 })]),
+          number: Type.Optional(Type.Union([Type.Integer(), Type.Array(Type.Integer())])),
+          mode: Type.Optional(Type.Union([Type.Enum(["all"]), Type.Array(Type.String())])),
+          filter: Type.Optional(
+            Type.Union([
+              Type.Null(),
+              Type.Object({ q: Type.String() }, { additionalProperties: false }),
+            ]),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      execute: (input) => ({
+        content: [{ type: "text", text: JSON.stringify(input) }],
+        details: null,
+      }),
+    });
+    const cli = { ...options, tools: [resolve], default: undefined, fallback: undefined };
+    const resolved = async (...argv: readonly string[]) => run(["resolve", ...argv], cli);
+
+    expect((await resolved("--thread-id", "PRRT_abc", "--number", "391")).stdout).toBe(
+      '{"threadId":"PRRT_abc","number":391}\n',
+    );
+    expect((await resolved("--thread-id", "123", "--mode", "all")).stdout).toBe(
+      '{"threadId":"123","mode":"all"}\n',
+    );
+    expect((await resolved("--thread-id", '["a","b"]', "--number", "[1,2]")).stdout).toBe(
+      '{"threadId":["a","b"],"number":[1,2]}\n',
+    );
+    expect((await resolved("--thread-id", "null", "--filter", "null")).stdout).toBe(
+      '{"threadId":"null","filter":null}\n',
+    );
+    expect((await resolved("--thread-id", "[]")).stderr).toContain(
+      "Invalid arguments at --thread-id: must not have fewer than 1 items\n",
+    );
+    expect((await resolved("--thread-id", "a", "--number", "1.5")).stderr).toContain(
+      "Invalid arguments at --number: must be integer\n",
+    );
+    expect(await resolved("--thread-id", "a", "--filter", "{q")).toEqual({
+      stdout: "",
+      stderr: "Invalid arguments at --filter: must be JSON\n",
+      exitCode: 1,
+    });
+    const help = (await resolved("--help")).stdout;
+    expect(help).toContain("--thread-id=<thread-id|json>");
+    expect(help).toContain("--number=<number|json>");
+    expect(help).toContain("--mode=<all|json>");
+    expect(help).toContain("--filter=<json>");
+  });
+
   it("names the bound a number in a union or an intersection missed", async () => {
     const versions = defineTool({
       name: "demo_versions",
