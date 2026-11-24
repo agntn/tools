@@ -524,16 +524,17 @@ describe("CLI commands", () => {
         cli: { positional: ["archive"] },
         execute: ({ archive }) => {
           const hint = "The archive is encrypted, so pass its password";
+          const both = "Name the archive and the password it was made with";
           if (archive === "pair") {
             throw new ToolInputError(
-              [`Invalid arguments: missing password and archive. ${hint}`],
+              [`Invalid arguments: missing password and archive. ${both}`],
               [
                 {
-                  line: `Invalid arguments: missing password and archive. ${hint}`,
+                  line: `Invalid arguments: missing password and archive. ${both}`,
                   at: "",
                   problem: "must have required properties password, archive",
                   missing: ["password", "archive"],
-                  hint,
+                  hint: both,
                 },
               ],
             );
@@ -572,7 +573,7 @@ describe("CLI commands", () => {
       expect((await run(["unzip", "pair"], unzip)).stderr).toBe(
         [
           "Invalid arguments: missing --password",
-          "Invalid arguments: missing <ARCHIVE>. The archive is encrypted, so pass its password",
+          "Invalid arguments: missing <ARCHIVE>. Name the archive and the password it was made with",
           "",
         ].join("\n"),
       );

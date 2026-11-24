@@ -193,7 +193,7 @@ export interface InputIssue {
   readonly problem: string;
   /** Required properties the value at `at` lacks, when that is the failure. */
   readonly missing?: readonly string[];
-  /** The way out, for a surface that rebuilds the line from the parts. Say it in `line` too. */
+  /** The way out of the whole failure, not of one key. Say it in `line` too. */
   readonly hint?: string;
 }
 
