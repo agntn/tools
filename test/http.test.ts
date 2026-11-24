@@ -387,6 +387,26 @@ describe("HTTP adapter", () => {
     expect([over.status, fits.status]).toEqual([413, 200]);
   });
 
+  it("refuses an oversized body even when middleware holds a clone of the request", async () => {
+    const capped = createHttpHandler(info, tools, { maxRequestBodySize: 4 });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("0123456789"));
+      },
+    });
+    const init = {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      duplex: "half",
+    };
+    const request = new Request("http://localhost/demo_echo", init);
+    const clone = request.clone();
+    const response = await capped.fetch(request);
+    expect(response.status).toBe(413);
+    await clone.body?.cancel();
+  });
+
   it.each([0, -1, Number.NaN, "4mb"])("refuses maxRequestBodySize %j", (size) => {
     const options = { maxRequestBodySize: size } as unknown as Parameters<
       typeof createHttpHandler

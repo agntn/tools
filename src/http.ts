@@ -298,7 +298,7 @@ async function readBody(request: Request, limit: number): Promise<string | undef
   for (let read = await reader.read(); !read.done; read = await reader.read()) {
     size += read.value.byteLength;
     if (size > limit) {
-      await reader.cancel();
+      void reader.cancel().catch(() => undefined);
       return undefined;
     }
     text += decoder.decode(read.value, { stream: true });
