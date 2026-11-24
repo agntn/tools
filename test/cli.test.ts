@@ -511,6 +511,76 @@ describe("CLI commands", () => {
         "Invalid arguments: key and text clash\n",
       );
     });
+    it("keeps the executor's hint after the flag it names", async () => {
+      const archive = defineTool({
+        name: "demo_unzip",
+        title: "Unzip",
+        description: "Opens an archive.",
+        effect: "read",
+        input: Type.Object(
+          { archive: Type.String(), password: Type.Optional(Type.String()) },
+          { additionalProperties: false },
+        ),
+        cli: { positional: ["archive"] },
+        execute: ({ archive }) => {
+          const hint = "The archive is encrypted, so pass its password";
+          const both = "Name the archive and the password it was made with";
+          if (archive === "pair") {
+            throw new ToolInputError(
+              [`Invalid arguments: missing password and archive. ${both}`],
+              [
+                {
+                  line: `Invalid arguments: missing password and archive. ${both}`,
+                  at: "",
+                  problem: "must have required properties password, archive",
+                  missing: ["password", "archive"],
+                  hint: both,
+                },
+              ],
+            );
+          }
+          if (archive === "short") {
+            throw new ToolInputError(
+              [`Invalid arguments at /password: too short. ${hint}`],
+              [
+                {
+                  line: `Invalid arguments at /password: too short. ${hint}`,
+                  at: "/password",
+                  problem: "too short",
+                  hint,
+                },
+              ],
+            );
+          }
+          throw new ToolInputError(
+            [`Missing required option: password. ${hint}`],
+            [
+              {
+                line: `Missing required option: password. ${hint}`,
+                at: "",
+                problem: "must have required properties password",
+                missing: ["password"],
+                hint,
+              },
+            ],
+          );
+        },
+      });
+      const unzip: CliOptions = { ...cli, tools: [archive] };
+      expect((await run(["unzip", "secret.zip"], unzip)).stderr).toBe(
+        "Invalid arguments: missing --password. The archive is encrypted, so pass its password\n",
+      );
+      expect((await run(["unzip", "pair"], unzip)).stderr).toBe(
+        [
+          "Invalid arguments: missing --password",
+          "Invalid arguments: missing <ARCHIVE>. Name the archive and the password it was made with",
+          "",
+        ].join("\n"),
+      );
+      expect((await run(["unzip", "short"], unzip)).stderr).toBe(
+        "Invalid arguments at --password: too short. The archive is encrypted, so pass its password\n",
+      );
+    });
   });
 
   it("rejects an unknown option, a repeated one and an extra positional before calling the tool", async () => {
