@@ -5,18 +5,18 @@
 [![license](https://npmx.dev/api/registry/badge/license/@agntn/tools)](https://npmx.dev/package/@agntn/tools)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/agntn/tools)
 
-🧰 Four hosts, one definition. You write the tool once. MCP, Pi, OMP and the AI SDK each get it the way they like it.
+🧰 Five hosts, one definition. You write the tool once. MCP, Pi, OMP, OpenCode and the AI SDK each get it the way they like it.
 
-Want to watch it happen? [tools.agntn.dev](https://tools.agntn.dev) has the docs and a playground. One call, four hosts, all live in your tab.
+Want to watch it happen? [tools.agntn.dev](https://tools.agntn.dev) has the docs and a playground. One call, MCP, Pi, OMP and the AI SDK, all live in your tab.
 
 ## Why?
 
-MCP wants an `inputSchema`. Pi wants `parameters` and a prompt snippet. OMP swaps your TypeBox for its own. The AI SDK wants yet another schema. So every tool lived in four files, and four files drift. Now it lives in one.
+MCP wants an `inputSchema`. Pi wants `parameters` and a prompt snippet. OMP swaps your TypeBox for its own. The AI SDK wants yet another schema. So every tool lived in a file per host, and those files drift. Now it lives in one.
 
 ## ✨ Features
 
 - 📝 **One definition.** Name, schema, effect and `execute`. That's the whole tool.
-- 🔌 **Four host adapters.** `createMcpServer`, `registerPiTools`, `registerOmpTools` and `toAiTool`. One call each.
+- 🔌 **Five host adapters.** `createMcpServer`, `registerPiTools`, `registerOmpTools`, `registerOpencodeTools` and `toAiTool`. One call each.
 - 🛡️ **Validation on every host.** The core checks each call before your code runs. Even when the host skips its own check.
 - 🗣️ **Errors a model can use.** A misspelled key names itself and the keys you do take. An enum lists its values.
 - 🧵 **One line per error.** Newlines, escape codes and bidi tricks in echoed text get flattened. No forged lines.
@@ -86,16 +86,17 @@ The typo never reached `execute`. The model gets told what it did wrong and what
 
 ## 🤖 Hosts
 
-| Host   | Adapter                                      | Peer                                |
-| ------ | -------------------------------------------- | ----------------------------------- |
-| MCP    | `createMcpServer` from `@agntn/tools/mcp`    | `@modelcontextprotocol/server`      |
-| H3     | `toH3Tools` from `@agntn/tools/h3`           | `h3-mcp`                            |
-| Docus  | `toToolkitTools` from `@agntn/tools/toolkit` | `zod`, beside `@nuxtjs/mcp-toolkit` |
-| Pi     | `registerPiTools` from `@agntn/tools/pi`     | `@earendil-works/pi-coding-agent`   |
-| OMP    | `registerOmpTools` from `@agntn/tools/omp`   | `@oh-my-pi/pi-coding-agent`         |
-| AI SDK | `toAiTool` from `@agntn/tools/ai`            | `ai`                                |
-| CLI    | `runCli` from `@agntn/tools/cli`             | none                                |
-| HTTP   | `createHttpHandler` from `@agntn/tools/http` | none                                |
+| Host     | Adapter                                              | Peer                                |
+| -------- | ---------------------------------------------------- | ----------------------------------- |
+| MCP      | `createMcpServer` from `@agntn/tools/mcp`            | `@modelcontextprotocol/server`      |
+| H3       | `toH3Tools` from `@agntn/tools/h3`                   | `h3-mcp`                            |
+| Docus    | `toToolkitTools` from `@agntn/tools/toolkit`         | `zod`, beside `@nuxtjs/mcp-toolkit` |
+| Pi       | `registerPiTools` from `@agntn/tools/pi`             | `@earendil-works/pi-coding-agent`   |
+| OMP      | `registerOmpTools` from `@agntn/tools/omp`           | `@oh-my-pi/pi-coding-agent`         |
+| OpenCode | `registerOpencodeTools` from `@agntn/tools/opencode` | `@opencode/plugin`, types only      |
+| AI SDK   | `toAiTool` from `@agntn/tools/ai`                    | `ai`                                |
+| CLI      | `runCli` from `@agntn/tools/cli`                     | none                                |
+| HTTP     | `createHttpHandler` from `@agntn/tools/http`         | none                                |
 
 Install only what you ship. An MCP server doesn't need the AI SDK, and nobody makes it pretend. Every host has its own page with the gotchas: [tools.agntn.dev/hosts](https://tools.agntn.dev/hosts).
 
