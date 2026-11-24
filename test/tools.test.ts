@@ -1863,6 +1863,87 @@ describe("AI SDK adapter", () => {
       ).rejects.toThrow(`details must not have their own ${field} field`);
     },
   );
+
+  it.for([
+    ["read", false],
+    ["write", true],
+    ["destructive", true],
+    ["exec", true],
+  ] as const)("asks before a %s tool runs: %s", ([effect, asks]) => {
+    const tool = toAiTool(
+      defineTool({
+        name: "demo_effect",
+        title: "Effect",
+        description: "x",
+        effect,
+        input: Type.Object({}),
+        execute: () => ({ content: [{ type: "text", text: "done" }], details: {} }),
+      }),
+    );
+
+    expect(tool.needsApproval).toBe(asks);
+  });
+
+  it("holds a write until someone approves it, and a caller's toolApproval still wins", async () => {
+    const usage = {
+      inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 1, text: 1, reasoning: undefined },
+    };
+    const writes: string[] = [];
+    const note = defineTool({
+      name: "demo_note",
+      title: "Note",
+      description: "x",
+      effect: "write",
+      input: Type.Object({ text: Type.String() }, { additionalProperties: false }),
+      execute: ({ text }) => {
+        writes.push(text);
+        return { content: [{ type: "text", text: "saved" }], details: {} };
+      },
+    });
+    const run = (approve: boolean) =>
+      generateText({
+        model: new MockLanguageModelV4({
+          doGenerate: [
+            {
+              content: [
+                {
+                  type: "tool-call",
+                  toolCallId: "1",
+                  toolName: "demo_note",
+                  input: '{"text":"hi"}',
+                },
+              ],
+              finishReason: { unified: "tool-calls", raw: undefined },
+              usage,
+              warnings: [],
+            },
+            {
+              content: [{ type: "text", text: "done" }],
+              finishReason: { unified: "stop", raw: undefined },
+              usage,
+              warnings: [],
+            },
+          ],
+        }),
+        prompt: "save hi",
+        tools: toAiTools([note]),
+        stopWhen: isStepCount(2),
+        ...(approve ? { toolApproval: { demo_note: "approved" as const } } : {}),
+      });
+
+    const held = await run(false);
+    expect(
+      held.content.flatMap((part) =>
+        part.type === "tool-approval-request" ? [part.toolCall.toolName] : [],
+      ),
+    ).toEqual(["demo_note"]);
+    expect(writes).toEqual([]);
+
+    const approved = await run(true);
+    expect(approved.steps[0]?.toolResults[0]?.output).toEqual({ text: "saved" });
+    expect(writes).toEqual(["hi"]);
+  });
 });
 
 describe("OMP adapter", () => {

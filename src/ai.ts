@@ -39,7 +39,8 @@ export type AiToolOutput<Details> = (Details extends object ? Details : { detail
 /**
  * Converts one tool, keeping its input and details types.
  *
- * A result with `isError` throws its text, which the AI SDK reports to the
+ * A tool whose `effect` isn't `read` waits for approval, unless the caller's `toolApproval`
+ * says otherwise. A result with `isError` throws its text, which the AI SDK reports to the
  * model as a tool error, the same as an executor that throws. The model reads
  * `text` and the images, as on every other host, not the details spelled out a second time.
  *
@@ -54,6 +55,7 @@ export function toAiTool<Input extends TObject, Details>(
   const built = tool({
     title: definition.title,
     description: definition.description,
+    needsApproval: definition.effect !== "read",
     inputSchema: jsonSchema<unknown>(wireSchema(definition), {
       validate(value) {
         const checked = validateInput(definition, value);

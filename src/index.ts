@@ -47,7 +47,7 @@ export interface ToolResult<Details = unknown> {
 }
 
 /**
- * What a call does to the world, mapped to MCP annotations and OMP approval.
+ * What a call does to the world, mapped to MCP annotations and to approval on OMP and the AI SDK.
  *
  * - `read` changes nothing.
  * - `write` changes state that the next call can undo or overwrite.
