@@ -2,7 +2,13 @@ import { H3 } from "h3";
 import { describe, expect, it } from "vite-plus/test";
 
 import { createHttpHandler, type HttpHost } from "../src/http.ts";
-import { defineTool, Type, validateInput, type ToolCallContext } from "../src/index.ts";
+import {
+  defineTool,
+  sanitizeLine,
+  Type,
+  validateInput,
+  type ToolCallContext,
+} from "../src/index.ts";
 import { callTool } from "../src/mcp.ts";
 
 const info = { name: "demo", version: "1.2.3" };
@@ -120,7 +126,44 @@ const bare = defineTool({
   execute: () => ({ content: [{ type: "text", text: "bare" }], details: undefined }),
 });
 
-const tools = [echo, save, sulk, crash, pixel, peek, stall, huge, bare];
+/* demo_linger's last signal, behind a function so TS won't narrow it. */
+let lingered: AbortSignal | undefined;
+const lingerSignal = (): AbortSignal | undefined => lingered;
+
+const FORGED = 'two\n\nevent: result\ndata: {"status":200}';
+
+const count = defineTool({
+  name: "demo_count",
+  title: "Demo Count",
+  description: "Count to three out loud.",
+  effect: "read",
+  input: Type.Object({ forge: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+  execute: ({ forge }, { progress }) => {
+    progress?.("one", { progress: 1, total: 3 });
+    progress?.(forge === true ? FORGED : "two");
+    progress?.("three", { progress: Number.NaN, total: Number.POSITIVE_INFINITY });
+    return { content: [{ type: "text", text: "counted" }], details: { to: 3 } };
+  },
+});
+
+const linger = defineTool({
+  name: "demo_linger",
+  title: "Demo Linger",
+  description: "Say one thing, then wait until cancelled.",
+  effect: "read",
+  input: Type.Object({}),
+  execute: async (_input, { signal, progress }) => {
+    lingered = signal;
+    progress?.("waiting");
+    return await new Promise<never>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        reject(new Error("lingered out"));
+      });
+    });
+  },
+});
+
+const tools = [echo, save, sulk, crash, pixel, peek, stall, huge, bare, count, linger];
 const handler = createHttpHandler(info, tools);
 
 /* A POST of JSON text to one tool. */
@@ -139,6 +182,35 @@ async function sent(request: Request): Promise<{ status: number; body: unknown }
   return { status: response.status, body: await response.json() };
 }
 
+/* A POST that asks for events. */
+function streamPost(path: string, body: string, accept = "text/event-stream"): Request {
+  return new Request(`http://localhost${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept },
+    body,
+  });
+}
+
+/* Every event of a streamed call, as its name and parsed data. */
+async function events(request: Request): Promise<{ event: string; data: unknown }[]> {
+  const response = await handler.fetch(request);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("text/event-stream");
+  expect(response.headers.get("cache-control")).toBe("no-cache");
+  const text = await response.text();
+  expect(text.endsWith("\n\n")).toBe(true);
+  return text
+    .slice(0, -2)
+    .split("\n\n")
+    .map((frame) => {
+      const [event, data, ...rest] = frame.split("\n");
+      expect(rest).toEqual([]);
+      expect(event).toMatch(/^event: /);
+      expect(data).toMatch(/^data: /);
+      return { event: event?.slice(7) ?? "", data: JSON.parse(data?.slice(6) ?? "") as unknown };
+    });
+}
+
 describe("HTTP adapter", () => {
   it("lists the read tools with their schemas and effects, and nothing that writes", async () => {
     const { status, body } = await sent(new Request("http://localhost/"));
@@ -154,6 +226,8 @@ describe("HTTP adapter", () => {
       "demo_stall",
       "demo_huge",
       "demo_bare",
+      "demo_count",
+      "demo_linger",
     ]);
     expect(listed[0]).toEqual({
       name: "demo_echo",
@@ -418,6 +492,124 @@ describe("HTTP adapter", () => {
     expect(() => createHttpHandler(info, tools, { base: "http/demo" })).toThrow(
       new TypeError('base must start with "/", got "http/demo"'),
     );
+  });
+
+  it("streams each progress update, then the answer with its status", async () => {
+    expect(await events(streamPost("/demo_count", "{}"))).toEqual([
+      { event: "progress", data: { message: "one", progress: 1, total: 3 } },
+      { event: "progress", data: { message: "two" } },
+      { event: "progress", data: { message: "three" } },
+      { event: "result", data: { status: 200, text: "counted", details: { to: 3 } } },
+    ]);
+  });
+
+  it("keeps a progress line from forging an event of its own", async () => {
+    const frames = await events(streamPost("/demo_count", '{"forge":true}'));
+    expect(frames.map((frame) => frame.event)).toEqual([
+      "progress",
+      "progress",
+      "progress",
+      "result",
+    ]);
+    expect(frames[1]?.data).toEqual({ message: sanitizeLine(FORGED) });
+  });
+
+  it.each([
+    ["text/event-stream", true],
+    ["application/json, Text/Event-Stream; charset=utf-8", true],
+    ["text/event-stream;q=0.5, application/json", true],
+    ["text/event-stream; q=0", false],
+    ["text/event-stream;q=0.000", false],
+    ["*/*", false],
+    ["text/*", false],
+    ["application/json", false],
+  ])("reads Accept %j as a stream: %s", async (accept, stream) => {
+    const response = await handler.fetch(streamPost("/demo_echo", '{"word":"hi"}', accept));
+    const type = response.headers.get("content-type") ?? "";
+    expect(type.startsWith("text/event-stream")).toBe(stream);
+    expect(type.startsWith("application/json")).toBe(!stream);
+  });
+
+  it.each([
+    ["/demo_echo", '{"wrod":"hi"}', 400],
+    ["/demo_sulk", "", 422],
+    ["/demo_crash", "", 500],
+    ["/demo_huge", "", 500],
+  ])("streams %s with the status the plain call gets", async (path, input, status) => {
+    const plain = await handler.fetch(post(path, input));
+    const frames = await events(streamPost(path, input));
+    const body = (await plain.json()) as object;
+    expect(plain.status).toBe(status);
+    expect(frames).toEqual([{ event: "result", data: { status, ...body } }]);
+  });
+
+  it("refuses before the call as plain JSON, even to a client that wants events", async () => {
+    const unknown = await handler.fetch(streamPost("/demo_nope", "{}"));
+    const writing = await handler.fetch(streamPost("/demo_save", '{"word":"x"}'));
+    const untyped = await handler.fetch(
+      new Request("http://localhost/demo_echo", {
+        method: "POST",
+        headers: { accept: "text/event-stream" },
+        body: "{}",
+      }),
+    );
+    expect([unknown.status, writing.status, untyped.status]).toEqual([404, 403, 415]);
+    expect(unknown.headers.get("content-type")).toMatch(/^application\/json/);
+  });
+
+  it("hands the stream's tool the request as host, and still no ask", async () => {
+    const request = new Request("http://localhost/demo_peek", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "text/event-stream",
+        "x-agent": "gtk",
+      },
+    });
+    const frames = await events(request);
+    expect(frames).toEqual([{ event: "result", data: { status: 200, text: "gtk", details: {} } }]);
+    expect(seen?.host).toEqual({ http: true, request });
+    expect(seen?.progress).toBeTypeOf("function");
+    expect(seen?.ask).toBeUndefined();
+  });
+
+  it("cancels a streamed read when the client stops reading", async () => {
+    lingered = undefined;
+    const response = await handler.fetch(streamPost("/demo_linger", "{}"));
+    const reader = response.body?.getReader();
+    const first = await reader?.read();
+    expect(new TextDecoder().decode(first?.value)).toBe(
+      'event: progress\ndata: {"message":"waiting"}\n\n',
+    );
+    expect(lingerSignal()?.aborted).toBe(false);
+    await reader?.cancel(new Error("closed the tab"));
+    expect(lingerSignal()?.aborted).toBe(true);
+  });
+
+  it("ends a streamed read with a 500 when the request is aborted", async () => {
+    const controller = new AbortController();
+    const request = new Request("http://localhost/demo_stall", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "text/event-stream" },
+      signal: controller.signal,
+    });
+    const pending = events(request);
+    controller.abort(new Error("client left"));
+    expect(await pending).toEqual([
+      { event: "result", data: { status: 500, lines: ["demo_stall failed: client left"] } },
+    ]);
+  });
+
+  it("streams through h3 without buffering the progress", async () => {
+    lingered = undefined;
+    const mounted = createHttpHandler(info, tools, { base: "/http/demo" });
+    const app = new H3().all("/http/demo/**", async (event) => await mounted.fetch(event.req));
+    const response = await app.fetch(streamPost("/http/demo/demo_linger", "{}"));
+    const reader = response.body?.getReader();
+    const first = await reader?.read();
+    expect(new TextDecoder().decode(first?.value)).toMatch(/^event: progress\n/);
+    await reader?.cancel();
+    expect(lingerSignal()?.aborted).toBe(true);
   });
 
   it("mounts in h3 as it is", async () => {
