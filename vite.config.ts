@@ -41,6 +41,7 @@ export default defineConfig({
               name: ["ExtensionAPI", "ExtensionContext"],
               package: "@earendil-works/pi-coding-agent",
             },
+            { from: "package", name: ["Context", "ToolContext"], package: "@opencode/plugin" },
             { from: "lib", name: ["AbortSignal", "Request"] },
           ],
           ignoreInferredTypes: true,

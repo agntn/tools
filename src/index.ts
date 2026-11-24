@@ -47,7 +47,7 @@ export interface ToolResult<Details = unknown> {
 }
 
 /**
- * What a call does to the world, mapped to MCP annotations and to approval on OMP and the AI SDK.
+ * What a call does to the world: MCP annotations, and approval on OMP, OpenCode and the AI SDK.
  *
  * - `read` changes nothing.
  * - `write` changes state that the next call can undo or overwrite.
@@ -137,7 +137,10 @@ export interface ToolCallContext {
    * replayed, so ask before the first effect and in the same order every time.
    */
   ask?: ToolAsk;
-  /** Pi's or OMP's `ctx`, `CliHost`, `McpHost`, `HttpHost` or nothing. Narrow it yourself. */
+  /**
+   * Pi's or OMP's `ctx`, OpenCode's `ToolContext`, `CliHost`, `McpHost`, `HttpHost` or nothing.
+   * Narrow it yourself.
+   */
   host?: unknown;
 }
 
@@ -152,7 +155,7 @@ export interface ToolDefinition<
   readonly title: string;
   /** Complete instruction for the model. MCP clients see nothing else. */
   readonly description: string;
-  /** MCP `icons` in `tools/list`. Pi, OMP, the AI SDK and the CLI don't draw them. */
+  /** MCP `icons` in `tools/list`. Pi, OMP, OpenCode, the AI SDK and the CLI don't draw them. */
   readonly icons?: readonly Icon[];
   /** MCP `_meta` in `tools/list`, such as `ui` or `openai/extensions`. No other surface reads it. */
   readonly meta?: Readonly<Record<string, unknown>>;

@@ -9,6 +9,7 @@ import { createHttpHandler } from "../../dist/http.mjs";
 import { invokeTool, type ToolDefinition } from "../../dist/index.mjs";
 import { callTool, createMcpServer, listTools } from "../../dist/mcp.mjs";
 import { registerOmpTools } from "../../dist/omp.mjs";
+import { registerOpencodeTools } from "../../dist/opencode.mjs";
 import { registerPiTools } from "../../dist/pi.mjs";
 import { toToolkitTools } from "../../dist/toolkit.mjs";
 import { Type, defineTool } from "../../src/index.ts";
@@ -35,6 +36,7 @@ const info = { name: "copies", version: "0.0.0", description: "Two copies." };
 declare const pi: Parameters<typeof registerPiTools>[0];
 declare const omp: Parameters<typeof registerOmpTools>[0];
 declare const ompOptions: Parameters<typeof registerOmpTools>[2];
+declare const opencode: Parameters<typeof registerOpencodeTools>[0];
 
 export const list: readonly ToolDefinition[] = tools;
 
@@ -51,4 +53,5 @@ export const surfaces = [
   createCli({ ...info, tools }),
   registerPiTools(pi, tools),
   registerOmpTools(omp, tools, ompOptions),
+  registerOpencodeTools(opencode, tools),
 ];

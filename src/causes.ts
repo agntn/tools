@@ -1,8 +1,8 @@
 /**
  * The `caused by:` lines under a thrown error, one copy for every host.
  *
- * MCP prints them under its first line. Pi, OMP and the AI SDK show only `message`, so there
- * the lines ride in the message itself.
+ * MCP prints them under its first line. Pi, OMP, OpenCode and the AI SDK show only `message`,
+ * so there the lines ride in the message itself.
  */
 
 import { sanitizeLine, ToolInputError } from "./index.ts";

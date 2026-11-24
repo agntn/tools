@@ -1,7 +1,7 @@
 {
   "name": "@agntn/tools",
   "version": "0.3.3",
-  "description": "One tool definition for MCP, Pi, OMP and the AI SDK",
+  "description": "One tool definition for MCP, Pi, OMP, OpenCode and the AI SDK",
   "homepage": "https://github.com/agntn/tools#readme",
   "bugs": "https://github.com/agntn/tools/issues",
   "license": "MIT",
@@ -44,6 +44,10 @@
       "types": "./dist/omp.d.mts",
       "import": "./dist/omp.mjs"
     },
+    "./opencode": {
+      "types": "./dist/opencode.d.mts",
+      "import": "./dist/opencode.mjs"
+    },
     "./ai": {
       "types": "./dist/ai.d.mts",
       "import": "./dist/ai.mjs"
@@ -73,6 +77,7 @@
     "@modelcontextprotocol/sdk": "catalog:deps",
     "@modelcontextprotocol/server": "catalog:dev",
     "@oh-my-pi/pi-coding-agent": "catalog:dev",
+    "@opencode/plugin": "catalog:dev",
     "@types/node": "catalog:dev",
     "ai": "catalog:deps",
     "h3": "catalog:dev",
@@ -88,6 +93,7 @@
     "@earendil-works/pi-coding-agent": ">=0.84.2 <2",
     "@modelcontextprotocol/server": ">=2.2.0 <3",
     "@oh-my-pi/pi-coding-agent": ">=18.0.0 <19",
+    "@opencode/plugin": ">=2.3.0 <3",
     "ai": ">=7.0.0 <8",
     "h3-mcp": ">=0.2.0 <0.3",
     "zod": ">=4.1.13 <5"
@@ -100,6 +106,9 @@
       "optional": true
     },
     "@oh-my-pi/pi-coding-agent": {
+      "optional": true
+    },
+    "@opencode/plugin": {
       "optional": true
     },
     "ai": {

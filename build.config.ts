@@ -16,6 +16,7 @@ export default defineBuildConfig({
         "./src/toolkit.ts",
         "./src/pi.ts",
         "./src/omp.ts",
+        "./src/opencode.ts",
         "./src/ai.ts",
         "./src/cli.ts",
       ],
