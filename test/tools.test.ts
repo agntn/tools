@@ -987,7 +987,8 @@ describe("lazy", () => {
 
   it("refuses a call cancelled during the load and keeps the module for the next", async () => {
     const importing = Promise.withResolvers<string>();
-    const operations = lazy(async () => await importing.promise);
+    const load = vi.fn(async () => await importing.promise);
+    const operations = lazy(load);
     const cancel = new AbortController();
 
     const cancelled = operations(cancel.signal);
@@ -996,6 +997,7 @@ describe("lazy", () => {
 
     await expect(cancelled).rejects.toThrow("Esc");
     expect(await operations(new AbortController().signal)).toBe("loaded");
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });
 
