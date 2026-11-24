@@ -15,6 +15,9 @@ import {
   type ToolResult,
 } from "./index.ts";
 
+/** The body cap `createMcpHandler` from the MCP SDK uses, 4 MiB. */
+const MAX_BODY = 4 * 1024 * 1024;
+
 /** Every effect a tool can declare. */
 const EFFECTS: readonly ToolEffect[] = ["read", "write", "destructive", "exec"];
 
@@ -31,6 +34,8 @@ export interface HttpHandlerOptions {
   readonly effects?: readonly ToolEffect[];
   /** Mount path, such as `/http/memory`. The root by default. */
   readonly base?: string;
+  /** Largest body in bytes, 4 MiB by default. A bigger one gets 413. */
+  readonly maxRequestBodySize?: number;
 }
 
 /** What a tool finds in `host` over HTTP. The client wrote it, so it proves nothing. */
@@ -80,6 +85,7 @@ export interface HttpHandler {
 interface Served {
   readonly info: HttpServerInfo;
   readonly base: string;
+  readonly maxBody: number;
   readonly effects: readonly ToolEffect[];
   readonly tools: readonly ToolDefinition[];
   readonly listing: HttpListing;
@@ -94,6 +100,7 @@ interface Served {
  * @returns {HttpHandler} The handler, with `fetch` bound to it.
  * @throws {ToolDefinitionError} When two tools share a name.
  * @throws {TypeError} When `base` or `effects` is malformed.
+ * @throws {RangeError} When `maxRequestBodySize` isn't a positive number.
  */
 export function createHttpHandler(
   info: HttpServerInfo,
@@ -106,6 +113,7 @@ export function createHttpHandler(
   const served: Served = {
     info,
     base: basePath(options.base),
+    maxBody: bodyLimit(options.maxRequestBodySize),
     effects,
     tools: [...tools],
     listing: { name: info.name, version: info.version, tools: listed },
@@ -133,7 +141,7 @@ function servedEffects(effects: readonly ToolEffect[] | undefined): ToolEffect[]
 }
 
 /**
- * The mount path without its trailing slash, the root as the empty string.
+ * The mount path as `URL` encodes it, without its trailing slash, the root as `""`.
  *
  * @param base - The path as given.
  * @returns {string} A path to compare the request path with.
@@ -143,7 +151,24 @@ function basePath(base: string | undefined): string {
   if (base === undefined) return "";
   if (!base.startsWith("/"))
     throw new TypeError(`base must start with "/", got ${JSON.stringify(base)}`);
-  return base.replace(/\/+$/, "");
+  return new URL(base, "http://localhost").pathname.replace(/\/+$/, "");
+}
+
+/**
+ * The body cap, checked like the MCP SDK checks its own.
+ *
+ * @param size - The option as given.
+ * @returns {number} The cap in bytes.
+ * @throws {RangeError} When it isn't a positive number.
+ */
+function bodyLimit(size: number | undefined): number {
+  if (size === undefined) return MAX_BODY;
+  if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) {
+    throw new RangeError(
+      `maxRequestBodySize must be a positive number of bytes, got ${String(size)}`,
+    );
+  }
+  return size;
 }
 
 /**
@@ -213,8 +238,8 @@ async function call(served: Served, name: string, request: Request): Promise<Res
   if (!isJson(request.headers.get("content-type"))) {
     return refusal(415, "Send the input as Content-Type: application/json");
   }
-  const input = await readInput(request);
-  if (!input.ok) return refusal(400, input.line);
+  const input = await readInput(request, served.maxBody);
+  if (!input.ok) return refusal(input.status, input.line);
   try {
     const host: HttpHost = { http: true, request };
     return answer(await invokeTool(tool, input.value, { signal: request.signal, host }));
@@ -235,25 +260,50 @@ function isJson(type: string | null): boolean {
   return type?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
 }
 
-/** The parsed body, or the line that says why there is none. */
-type ReadInput = { ok: true; value: unknown } | { ok: false; line: string };
+/** The parsed body, or the status and line that say why there is none. */
+type ReadInput = { ok: true; value: unknown } | { ok: false; status: 400 | 413; line: string };
 
 /**
  * The body as JSON, an empty one as `{}`.
  *
  * @param request - The incoming request.
+ * @param limit - The body cap in bytes.
  * @returns {Promise<ReadInput>} The input, or why not.
  */
-async function readInput(request: Request): Promise<ReadInput> {
+async function readInput(request: Request, limit: number): Promise<ReadInput> {
   try {
-    const body = await request.text();
+    const body = await readBody(request, limit);
+    if (body === undefined) return { ok: false, status: 413, line: `Body is over ${limit} bytes` };
     return { ok: true, value: body.trim() === "" ? {} : JSON.parse(body) };
   } catch (error) {
-    return {
-      ok: false,
-      line: `Body is not JSON: ${error instanceof Error ? error.message : String(error)}`,
-    };
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, status: 400, line: `Body is not JSON: ${message}` };
   }
+}
+
+/**
+ * The body as text, read only up to the cap, so a huge one never lands in memory.
+ *
+ * @param request - The incoming request.
+ * @param limit - The body cap in bytes.
+ * @returns {Promise<string | undefined>} The text, or `undefined` past the cap.
+ */
+async function readBody(request: Request, limit: number): Promise<string | undefined> {
+  if (Number(request.headers.get("content-length")) > limit) return undefined;
+  const reader = request.body?.getReader();
+  if (reader === undefined) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  let size = 0;
+  for (let read = await reader.read(); !read.done; read = await reader.read()) {
+    size += read.value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      return undefined;
+    }
+    text += decoder.decode(read.value, { stream: true });
+  }
+  return text + decoder.decode();
 }
 
 /**
@@ -268,7 +318,7 @@ function answer(result: ToolResult): Response {
   );
   const body: HttpAnswer = {
     text: resultText(result),
-    details: result.details,
+    details: result.details ?? null,
     ...(images.length > 0 ? { images } : {}),
   };
   return Response.json(body, { status: result.isError === true ? 422 : 200 });

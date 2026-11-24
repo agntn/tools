@@ -111,7 +111,16 @@ const huge = defineTool({
   execute: () => ({ content: [{ type: "text", text: "big" }], details: { n: 2n ** 64n } }),
 });
 
-const tools = [echo, save, sulk, crash, pixel, peek, stall, huge];
+const bare = defineTool({
+  name: "demo_bare",
+  title: "Demo Bare",
+  description: "Answer without details.",
+  effect: "read",
+  input: Type.Object({}),
+  execute: () => ({ content: [{ type: "text", text: "bare" }], details: undefined }),
+});
+
+const tools = [echo, save, sulk, crash, pixel, peek, stall, huge, bare];
 const handler = createHttpHandler(info, tools);
 
 /* A POST of JSON text to one tool. */
@@ -144,6 +153,7 @@ describe("HTTP adapter", () => {
       "demo_peek",
       "demo_stall",
       "demo_huge",
+      "demo_bare",
     ]);
     expect(listed[0]).toEqual({
       name: "demo_echo",
@@ -267,6 +277,13 @@ describe("HTTP adapter", () => {
     expect((body as { lines: string[] }).lines[0]).toMatch(/^demo_huge failed: .*BigInt/);
   });
 
+  it("keeps details in the answer when the tool has none", async () => {
+    expect(await sent(post("/demo_bare", ""))).toEqual({
+      status: 200,
+      body: { text: "bare", details: null },
+    });
+  });
+
   it("hands the images over beside the text", async () => {
     expect(await sent(post("/demo_pixel", ""))).toEqual({
       status: 200,
@@ -322,6 +339,59 @@ describe("HTTP adapter", () => {
   ])("refuses effects %j instead of serving nothing", (effects, message) => {
     const options = { effects } as unknown as Parameters<typeof createHttpHandler>[2];
     expect(() => createHttpHandler(info, tools, options)).toThrow(new TypeError(message));
+  });
+
+  it("finds a base with characters the URL encodes", async () => {
+    const mounted = createHttpHandler(info, tools, { base: "/outils/café" });
+    const listing = await mounted.fetch(new Request("http://localhost/outils/café"));
+    const echoed = await mounted.fetch(post("/outils/café/demo_echo", '{"word":"ok"}'));
+    expect([listing.status, echoed.status]).toEqual([200, 200]);
+  });
+
+  it("refuses a body over the cap without waiting for it to end", async () => {
+    const capped = createHttpHandler(info, tools, { maxRequestBodySize: 16 });
+    const endless = new ReadableStream<Uint8Array>({});
+    const init = {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": "1000000000" },
+      body: endless,
+      duplex: "half",
+    };
+    const response = await capped.fetch(new Request("http://localhost/demo_echo", init));
+    expect([response.status, await response.json()]).toEqual([
+      413,
+      { lines: ["Body is over 16 bytes"] },
+    ]);
+  });
+
+  it("counts a streamed body without a length against the cap", async () => {
+    const capped = createHttpHandler(info, tools, { maxRequestBodySize: 16 });
+    const streamed = (text: string): Request => {
+      const bytes = new TextEncoder().encode(text);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+          controller.close();
+        },
+      });
+      const init = {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        duplex: "half",
+      };
+      return new Request("http://localhost/demo_echo", init);
+    };
+    const over = await capped.fetch(streamed('{"word":"seventeen"}'));
+    const fits = await capped.fetch(streamed('{"word":"sixty"}'));
+    expect([over.status, fits.status]).toEqual([413, 200]);
+  });
+
+  it.each([0, -1, Number.NaN, "4mb"])("refuses maxRequestBodySize %j", (size) => {
+    const options = { maxRequestBodySize: size } as unknown as Parameters<
+      typeof createHttpHandler
+    >[2];
+    expect(() => createHttpHandler(info, tools, options)).toThrow(RangeError);
   });
 
   it("refuses a base that isn't a path", () => {
