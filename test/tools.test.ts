@@ -58,7 +58,12 @@ import { callAsking, canAsk, questionRound } from "../src/mcp-answers.ts";
 import { hostAsk, requestedSchema, type HostQuestion } from "../src/questions.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
-import { toToolkitTools, type ToolkitExtra } from "../src/toolkit.ts";
+import {
+  serverCardHook,
+  toToolkitTools,
+  type ToolkitExtra,
+  type ToolkitServerCard,
+} from "../src/toolkit.ts";
 
 const icon: Icon = {
   src: "https://demo.example/icon.svg",
@@ -405,7 +410,7 @@ describe("validateInput", () => {
 
 /* What the files the docs site aliases import at runtime, following `./` between them. */
 function docsImports(): Set<string> {
-  const queue = ["index.ts", "mcp.ts", "pi.ts", "omp.ts", "ai.ts"];
+  const queue = ["index.ts", "mcp.ts", "pi.ts", "omp.ts", "ai.ts", "toolkit.ts"];
   const seen = new Set<string>();
   const specifiers = new Set<string>();
   for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
@@ -1618,6 +1623,52 @@ describe("mcp-toolkit adapter", () => {
     expect(await client.callTool({ name: "demo_signal", arguments: {} })).toEqual({
       content: [{ type: "text", text: "true" }],
     });
+  });
+
+  it("puts the package tools and its serverInfo on the discovery card, the page tools first", () => {
+    const card: ToolkitServerCard = {
+      serverInfo: { name: "@agntn/demo", homepage: "https://demo.example" },
+      endpoints: [{ type: "streamable-http", url: "https://demo.example/mcp" }],
+      tools: [
+        { name: "list-pages", description: "Lists pages." },
+        { name: "demo_echo", description: "A stale copy." },
+      ],
+    };
+    const info = { name: "demo", version: "1.0.0", description: "Demo tools.", icons: [icon] };
+    serverCardHook(info, [echo, count])(undefined, card);
+
+    expect(card).toEqual({
+      serverInfo: {
+        name: "demo",
+        version: "1.0.0",
+        description: "Demo tools.",
+        icons: [icon],
+        homepage: "https://demo.example",
+      },
+      endpoints: [{ type: "streamable-http", url: "https://demo.example/mcp" }],
+      tools: [
+        { name: "list-pages", description: "Lists pages." },
+        { name: "demo_echo", description: "Echo a word." },
+        { name: "demo_count", description: "Count the letters of a word." },
+      ],
+    });
+  });
+
+  it("starts the card's tool list when the toolkit listed none, and leaves odd entries alone", () => {
+    const card: ToolkitServerCard = { serverInfo: "odd", tools: [null, { description: "x" }] };
+    serverCardHook({ name: "demo" }, [echo])(undefined, card);
+    expect(card).toEqual({
+      serverInfo: { name: "demo" },
+      tools: [null, { description: "x" }, { name: "demo_echo", description: "Echo a word." }],
+    });
+
+    const bare: ToolkitServerCard = {};
+    serverCardHook({ name: "demo" }, [echo])(undefined, bare);
+    expect(bare.tools).toEqual([{ name: "demo_echo", description: "Echo a word." }]);
+  });
+
+  it("refuses two tools with one name before any card is served", () => {
+    expect(() => serverCardHook({ name: "demo" }, [echo, echo])).toThrow(ToolDefinitionError);
   });
 });
 

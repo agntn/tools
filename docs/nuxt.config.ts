@@ -10,6 +10,7 @@ const LIBRARY_DEPENDENCIES = [
   "@modelcontextprotocol/server",
   "@modelcontextprotocol/client",
   "ai",
+  "zod",
 ];
 
 export default defineNuxtConfig({
@@ -20,6 +21,7 @@ export default defineNuxtConfig({
     "@agntn/tools/omp": resolve(librarySource, "omp.ts"),
     "@agntn/tools/opencode": resolve(librarySource, "opencode.ts"),
     "@agntn/tools/ai": resolve(librarySource, "ai.ts"),
+    "@agntn/tools/toolkit": resolve(librarySource, "toolkit.ts"),
     "@agntn/tools": resolve(librarySource, "index.ts"),
   },
   vite: {
@@ -33,6 +35,7 @@ export default defineNuxtConfig({
         "@modelcontextprotocol/server",
         "@modelcontextprotocol/client",
         "ai",
+        "zod",
       ],
     },
   },

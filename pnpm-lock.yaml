@@ -219,6 +219,9 @@ importers:
       wrangler:
         specifier: catalog:dev
         version: 4.156.0(@types/node@26.6.6)
+      zod:
+        specifier: catalog:dev
+        version: 4.6.5
 
 packages:
 
