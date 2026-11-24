@@ -27,7 +27,7 @@ const DROPPED = "The call's answer was dropped, and it may have run. Check befor
 
 /** Options for {@link createMcpServer}. */
 export interface McpServerOptions {
-  /** Asked before and after each call: a reason turns it away, `undefined` lets it through. */
+  /** Asked before and after each call: a reason or a throw turns it away, `undefined` doesn't. */
   readonly refuse?: () => string | undefined | PromiseLike<string | undefined>;
 }
 
@@ -133,12 +133,26 @@ async function guarded(
   tool: ToolDefinition | undefined,
   call: () => Promise<CallToolResult | InputRequiredResult>,
 ): Promise<CallToolResult | InputRequiredResult> {
-  const before = await refuse?.();
+  const before = await reasonOf(refuse);
   if (before !== undefined) return errorResult(before);
   const answer = await call();
-  const after = await refuse?.();
+  const after = await reasonOf(refuse);
   if (after === undefined) return answer;
   return mayHaveRun(tool, answer) ? errorResult(after, DROPPED) : errorResult(after);
+}
+
+/**
+ * The guard's reason, a throw counting as one.
+ *
+ * @param refuse - The guard, absent when nothing turns calls away.
+ * @returns {Promise<string | undefined>} The reason, if any.
+ */
+async function reasonOf(refuse: McpServerOptions["refuse"]): Promise<string | undefined> {
+  try {
+    return await refuse?.();
+  } catch (error) {
+    return `refuse failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 /**

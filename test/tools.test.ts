@@ -3433,6 +3433,25 @@ describe("a guard that turns calls away", () => {
     });
   });
 
+  it("counts a guard that throws as a refusal, before and after the call", async () => {
+    stored = 0;
+    const early = await guardedClient([store], () => {
+      throw new Error("disk gone");
+    });
+    expect(firstText(await early.callTool({ name: "demo_store", arguments: { word: "a" } }))).toBe(
+      "refuse failed: disk gone",
+    );
+    expect(stored).toBe(0);
+
+    const late = await guardedClient([store], async () =>
+      stored > 0 ? Promise.reject(new Error("disk gone")) : undefined,
+    );
+    expect(firstText(await late.callTool({ name: "demo_store", arguments: { word: "a" } }))).toBe(
+      "refuse failed: disk gone\nThe call's answer was dropped, and it may have run. Check before retrying.",
+    );
+    expect(stored).toBe(1);
+  });
+
   it("drops a question with the reason alone, since nothing ran past it", async () => {
     let calls = 0;
     const { client, seen } = formClient([]);
