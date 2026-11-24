@@ -10,8 +10,10 @@ import {
   sanitizeLine,
   ToolInputError,
   wireSchema,
+  type ToolCallContext,
   type ToolDefinition,
   type ToolEffect,
+  type ToolProgress,
   type ToolResult,
 } from "./index.ts";
 
@@ -76,6 +78,16 @@ export interface HttpRefusal {
   readonly lines: readonly string[];
 }
 
+/** One `progress` event of a streamed call. Numbers only when the tool gave them. */
+export interface HttpProgress {
+  readonly message: string;
+  readonly progress?: number;
+  readonly total?: number;
+}
+
+/** The `result` event ending a stream: the plain body plus its status. */
+export type HttpResult = (HttpAnswer | HttpRefusal) & { readonly status: number };
+
 /** A Fetch handler: `Request` in, `Response` out. */
 export interface HttpHandler {
   readonly fetch: (request: Request) => Promise<Response>;
@@ -93,6 +105,7 @@ interface Served {
 
 /**
  * Serves tools as JSON: `GET /` lists them, `POST /<tool name>` calls one.
+ * A call with `Accept: text/event-stream` streams its progress before the answer.
  *
  * @param info - Name and version for the listing.
  * @param tools - Tools to serve.
@@ -240,14 +253,140 @@ async function call(served: Served, name: string, request: Request): Promise<Res
   }
   const input = await readInput(request, served.maxBody);
   if (!input.ok) return refusal(input.status, input.line);
+  if (wantsStream(request.headers.get("accept"))) return streamed(tool, input.value, request);
+  const host: HttpHost = { http: true, request };
+  const settled = await settle(tool, input.value, { signal: request.signal, host });
+  const { status, body } = encoded(tool, settled, false);
+  return new Response(body, { status, headers: { "content-type": "application/json" } });
+}
+
+/**
+ * Whether `Accept` names `text/event-stream`, without `q=0`.
+ *
+ * @param accept - The header, absent when the client sent none.
+ * @returns {boolean} Whether to answer with events.
+ */
+function wantsStream(accept: string | null): boolean {
+  return (accept ?? "").split(",").some((range) => {
+    const [type, ...params] = range.split(";").map((part) => part.trim().toLowerCase());
+    return type === "text/event-stream" && !params.some((param) => /^q=0(?:\.0*)?$/u.test(param));
+  });
+}
+
+/** How a call ended, before it becomes text. */
+interface Settled {
+  readonly status: number;
+  readonly body: HttpAnswer | HttpRefusal;
+}
+
+/**
+ * Runs the call and turns any throw into a status.
+ *
+ * @param tool - Tool to run.
+ * @param input - The parsed body.
+ * @param context - Signal, host and, for a stream, progress.
+ * @returns {Promise<Settled>} The answer, or why there is none.
+ */
+async function settle(
+  tool: ToolDefinition,
+  input: unknown,
+  context: ToolCallContext,
+): Promise<Settled> {
   try {
-    const host: HttpHost = { http: true, request };
-    return answer(await invokeTool(tool, input.value, { signal: request.signal, host }));
+    const result = await invokeTool(tool, input, context);
+    return { status: result.isError === true ? 422 : 200, body: answerOf(result) };
   } catch (error) {
-    if (error instanceof ToolInputError) return refusal(400, ...error.lines);
-    const message = error instanceof Error ? error.message : String(error);
-    return refusal(500, `${tool.name} failed: ${message}`, ...causeLines(error));
+    return failure(tool, error);
   }
+}
+
+/**
+ * A throw as a refusal: 400 for bad input, else 500.
+ *
+ * @param tool - The tool that threw.
+ * @param error - What it threw.
+ * @returns {Settled} The refusal.
+ */
+function failure(tool: ToolDefinition, error: unknown): Settled {
+  if (error instanceof ToolInputError) return refused(400, ...error.lines);
+  const message = error instanceof Error ? error.message : String(error);
+  return refused(500, `${tool.name} failed: ${message}`, ...causeLines(error));
+}
+
+/**
+ * The ending as JSON text. Details that won't serialize become a 500.
+ *
+ * @param tool - The tool behind the answer.
+ * @param settled - How the call ended.
+ * @param withStatus - Whether the status goes into the body too.
+ * @returns {{ status: number; body: string }} The status and the JSON text.
+ */
+function encoded(
+  tool: ToolDefinition,
+  settled: Settled,
+  withStatus: boolean,
+): { status: number; body: string } {
+  const text = (ending: Settled): string =>
+    JSON.stringify(withStatus ? { status: ending.status, ...ending.body } : ending.body);
+  try {
+    return { status: settled.status, body: text(settled) };
+  } catch (error) {
+    const fallback = failure(tool, error);
+    return { status: fallback.status, body: text(fallback) };
+  }
+}
+
+/**
+ * Answers with `progress` events, then `result`. A client that leaves cancels a read.
+ *
+ * @param tool - Tool to run.
+ * @param input - The parsed body.
+ * @param request - The incoming request, for its signal and as the host.
+ * @returns {Response} A `text/event-stream` that ends with the answer.
+ */
+function streamed(tool: ToolDefinition, input: unknown, request: Request): Response {
+  const left = new AbortController();
+  const signal = AbortSignal.any([request.signal, left.signal]);
+  const host: HttpHost = { http: true, request };
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const send = (event: string, data: string): void => {
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
+      };
+      const progress = (message: string, amount?: ToolProgress): void => {
+        send("progress", JSON.stringify(progressOf(message, amount)));
+      };
+      void settle(tool, input, { signal, host, progress }).then((settled) => {
+        try {
+          send("result", encoded(tool, settled, true).body);
+          controller.close();
+        } catch {}
+      });
+    },
+    cancel(reason) {
+      left.abort(reason);
+    },
+  });
+  const headers = { "content-type": "text/event-stream", "cache-control": "no-cache" };
+  return new Response(body, { headers });
+}
+
+/**
+ * One progress event, with numbers only when they are numbers.
+ *
+ * @param message - The line, already cleaned by `invokeTool`.
+ * @param amount - How far along, when the tool knows.
+ * @returns {HttpProgress} The event body.
+ */
+function progressOf(message: string, amount: ToolProgress | undefined): HttpProgress {
+  const progress = amount?.progress;
+  const total = amount?.total;
+  return {
+    message,
+    ...(Number.isFinite(progress) ? { progress } : {}),
+    ...(Number.isFinite(total) ? { total } : {}),
+  };
 }
 
 /**
@@ -307,12 +446,12 @@ async function readBody(request: Request, limit: number): Promise<string | undef
 }
 
 /**
- * The tool's result as JSON: 200, or 422 for `isError`.
+ * The tool's result as the answer body.
  *
  * @param result - What the tool returned.
- * @returns {Response} The text, the details and any images.
+ * @returns {HttpAnswer} The text, the details and any images.
  */
-function answer(result: ToolResult): Response {
+function answerOf(result: ToolResult): HttpAnswer {
   const images = result.content.flatMap((block) =>
     block.type === "image" ? [{ data: block.data, mimeType: block.mimeType }] : [],
   );
@@ -321,7 +460,7 @@ function answer(result: ToolResult): Response {
     details: result.details ?? null,
     ...(images.length > 0 ? { images } : {}),
   };
-  return Response.json(body, { status: result.isError === true ? 422 : 200 });
+  return body;
 }
 
 /**
@@ -329,10 +468,22 @@ function answer(result: ToolResult): Response {
  *
  * @param status - HTTP status.
  * @param lines - Why, one line each.
+ * @returns {Settled} The status and the {@link HttpRefusal}.
+ */
+function refused(status: number, ...lines: readonly string[]): Settled {
+  const body: HttpRefusal = { lines: lines.map(sanitizeLine) };
+  return { status, body };
+}
+
+/**
+ * A refusal before the call starts, plain JSON even for a stream.
+ *
+ * @param status - HTTP status.
+ * @param lines - Why, one line each.
  * @returns {Response} The {@link HttpRefusal}.
  */
 function refusal(status: number, ...lines: readonly string[]): Response {
-  const body: HttpRefusal = { lines: lines.map(sanitizeLine) };
+  const { body } = refused(status, ...lines);
   return Response.json(body, { status });
 }
 
