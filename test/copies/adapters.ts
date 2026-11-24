@@ -5,6 +5,7 @@
 import { toAiTool, toAiTools } from "../../dist/ai.mjs";
 import { createCli } from "../../dist/cli.mjs";
 import { toH3Tools } from "../../dist/h3.mjs";
+import { createHttpHandler } from "../../dist/http.mjs";
 import { invokeTool, type ToolDefinition } from "../../dist/index.mjs";
 import { callTool, createMcpServer, listTools } from "../../dist/mcp.mjs";
 import { registerOmpTools } from "../../dist/omp.mjs";
@@ -43,6 +44,7 @@ export const surfaces = [
   callTool(info, tools, pick.name),
   invokeTool(pick, { word: "hi" }),
   toH3Tools(info, tools),
+  createHttpHandler({ ...info, version: "0.0.0" }, tools),
   toToolkitTools(info, tools),
   toAiTool(pick),
   toAiTools(tools),

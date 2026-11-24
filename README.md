@@ -95,6 +95,7 @@ The typo never reached `execute`. The model gets told what it did wrong and what
 | OMP    | `registerOmpTools` from `@agntn/tools/omp`   | `@oh-my-pi/pi-coding-agent`         |
 | AI SDK | `toAiTool` from `@agntn/tools/ai`            | `ai`                                |
 | CLI    | `runCli` from `@agntn/tools/cli`             | none                                |
+| HTTP   | `createHttpHandler` from `@agntn/tools/http` | none                                |
 
 Install only what you ship. An MCP server doesn't need the AI SDK, and nobody makes it pretend. Every host has its own page with the gotchas: [tools.agntn.dev/hosts](https://tools.agntn.dev/hosts).
 
