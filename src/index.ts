@@ -193,6 +193,8 @@ export interface InputIssue {
   readonly problem: string;
   /** Required properties the value at `at` lacks, when that is the failure. */
   readonly missing?: readonly string[];
+  /** The way out, for a surface that rebuilds the line from the parts. Say it in `line` too. */
+  readonly hint?: string;
 }
 
 /** Thrown by {@link invokeTool} when the arguments fail the tool schema. */

@@ -1125,9 +1125,22 @@ function placeIn(field: Field, inner: readonly string[]): string {
  *
  * @param fields - The command's fields.
  * @param issue - The failure as the core reports it.
- * @returns {string[]} Its lines, or the core's own line when the place is no word of the command.
+ * @returns {string[]} Its lines, the hint closing the last one, or the core's own line when the
+ *   place is no word of the command.
  */
 function cliIssueLines(fields: readonly Field[], issue: InputIssue): string[] {
+  const lines = rebuiltLines(fields, issue);
+  if (lines === undefined) return [issue.line];
+  if (issue.hint === undefined || lines.length === 0) return lines;
+  return [...lines.slice(0, -1), `${lines.at(-1)}. ${issue.hint}`];
+}
+
+/**
+ * @param fields - The command's fields.
+ * @param issue - One schema failure.
+ * @returns {string[] | undefined} The failure in CLI words, or `undefined` when no field maps.
+ */
+function rebuiltLines(fields: readonly Field[], issue: InputIssue): string[] | undefined {
   const byKey = (key: string) => fields.find((field) => field.key === key);
   if (issue.at === "" && issue.missing !== undefined) {
     return issue.missing.map((key) => {
@@ -1138,7 +1151,7 @@ function cliIssueLines(fields: readonly Field[], issue: InputIssue): string[] {
   const [, first, ...inner] = issue.at.split("/");
   const field =
     first === undefined ? undefined : byKey(first.replaceAll("~1", "/").replaceAll("~0", "~"));
-  if (field === undefined) return [issue.line];
+  if (field === undefined) return undefined;
   return [`Invalid arguments at ${placeIn(field, inner)}: ${issue.problem}`];
 }
 
