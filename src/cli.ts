@@ -970,7 +970,7 @@ function readOption(
 /**
  * @param field - The option's field.
  * @param token - Its token.
- * @returns {string} The long flag as typed; its own for a short one.
+ * @returns {string} The long flag the line used, without `no-`; its own for a short one.
  */
 function typedFlag(field: Field, token: OptionToken): string {
   const typed = (flag: string) => token.rawName === `--${flag}` || token.rawName === `--no-${flag}`;

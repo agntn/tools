@@ -1320,7 +1320,7 @@ describe("CLI flag aliases", () => {
     );
   });
 
-  it("names the flag the line typed when it fails", async () => {
+  it("names the old flag the line used when it fails", async () => {
     const tool = cli();
     const execute = vi.spyOn(list, "execute");
     const stderr = async (argv: readonly string[]) => (await run(argv, tool)).stderr;
@@ -1331,6 +1331,9 @@ describe("CLI flag aliases", () => {
       "Invalid arguments: --type given more than once\n",
     );
     expect(await stderr(["list", "--type"])).toBe("Invalid arguments: --type needs a value\n");
+    expect(await stderr(["list", "--no-strict", "--no-strict"])).toBe(
+      "Invalid arguments: --strict given more than once\n",
+    );
     expect(await stderr(["list", "--strict=yes"])).toBe(
       "Invalid arguments: --strict takes no value; use --strict or --no-strict\n",
     );
