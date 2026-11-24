@@ -31,6 +31,7 @@ import { stripEscapes } from "./escapes.ts";
 import { problemText } from "./failures.ts";
 
 export { sanitizeText } from "./escapes.ts";
+export { lazy } from "./lazy.ts";
 
 /** Content block understood by MCP, Pi and OMP alike. */
 export type ToolContent =
@@ -121,7 +122,7 @@ export interface Icon {
 
 /** Per-call context the adapters hand to `execute`. */
 export interface ToolCallContext {
-  /** On cancel a read answers at once and a write still waits. Pass it on so the work stops too. */
+  /** On cancel a read answers at once and a write still waits. Pass it on, `lazy` loaders too. */
   signal?: AbortSignal;
   /** Says the call is still at it. Absent where the host can't show it, so call `progress?.()`. */
   progress?: (message: string, amount?: ToolProgress) => void;
@@ -553,8 +554,9 @@ function schemaAt(root: SchemaNode, pointer: string): SchemaNode | undefined {
  *
  * Progress is best effort: a line after the call settles goes nowhere, and a host that throws on
  * one doesn't fail the call. The call answers once every question it started has settled, and a
- * question after that point rejects: nobody waits for the answer. A cancelled read doesn't wait
- * for anything and rejects with the abort reason. A write waits, since the host may have it.
+ * question after that point rejects: nobody waits for the answer. A call cancelled before it
+ * starts never runs. A cancelled read doesn't wait and rejects with the abort reason. A write
+ * waits, since the host may have it.
  *
  * @param tool - Tool to run.
  * @param args - Arguments as received from the host.
@@ -569,8 +571,8 @@ export async function invokeTool(
 ): Promise<ToolResult> {
   const checked = validateInput(tool, args);
   if (!checked.ok) throw new ToolInputError(checked.lines, checked.issues, tool.name);
+  context.signal?.throwIfAborted();
   const signal = tool.effect === "read" ? context.signal : undefined;
-  signal?.throwIfAborted();
   const { progress, ask } = context;
   if (!progress && !ask)
     return await untilAborted(() => tool.execute(checked.value, context), signal);
