@@ -10,6 +10,7 @@ const NOTES: Record<string, string> = {
   pi: "Same JSON Schema, plus the prompt snippet Pi puts in front of the model.",
   omp: "OMP's own Type.Unsafe carries the schema, so pattern and maxLength survive.",
   ai: "jsonSchema() with the core's validator. Nobody writes it again in Zod.",
+  opencode: "Same JSON Schema as input. A write meets OpenCode's permission rules first.",
 };
 
 const host = computed(() => HOSTS[props.hostIndex]!);
@@ -85,7 +86,12 @@ const dialect = computed(() =>
             <span>Dialect <span aria-hidden="true">[ one tool, the field each host puts it in ]</span></span>
             <span class="console-mark" aria-hidden="true" />
           </p>
-          <div class="hosts-map" role="table" aria-label="The field each host uses for the same idea">
+          <div
+            class="hosts-map"
+            role="table"
+            aria-label="The field each host uses for the same idea"
+            :style="{ '--hosts': HOSTS.length }"
+          >
             <div class="hosts-map-row" role="row">
               <span role="columnheader" />
               <span
@@ -208,7 +214,7 @@ const dialect = computed(() =>
   text-transform: none;
   letter-spacing: 0.02em;
 }
-/* The left column: the host, then the same six ideas across all four hosts, this one's column lit. */
+/* The left column: the host, then the same six ideas across every host, this one's column lit. */
 .hosts-left {
   display: grid;
   gap: 18px;
@@ -229,7 +235,7 @@ const dialect = computed(() =>
 }
 .hosts-map-row {
   display: grid;
-  grid-template-columns: 4.5rem repeat(4, minmax(0, 1fr));
+  grid-template-columns: 4.5rem repeat(var(--hosts), minmax(0, 1fr));
   gap: 4px;
   align-items: center;
 }
@@ -310,7 +316,7 @@ const dialect = computed(() =>
     display: none;
   }
   .hosts-map-row {
-    grid-template-columns: 3.75rem repeat(4, minmax(0, 1fr));
+    grid-template-columns: 3.75rem repeat(var(--hosts), minmax(0, 1fr));
     gap: 3px;
   }
   .hosts-map-cell {

@@ -7,7 +7,7 @@
 
 🧰 Five hosts, one definition. You write the tool once. MCP, Pi, OMP, OpenCode and the AI SDK each get it the way they like it.
 
-Want to watch it happen? [tools.agntn.dev](https://tools.agntn.dev) has the docs and a playground. One call, MCP, Pi, OMP and the AI SDK, all live in your tab.
+Want to watch it happen? [tools.agntn.dev](https://tools.agntn.dev) has the docs and a playground. One call, MCP, Pi, OMP, OpenCode and the AI SDK, all live in your tab.
 
 ## Why?
 

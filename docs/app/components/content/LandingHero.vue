@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import rootPackage from "../../../../package.json";
+import { spellOut } from "../../utils/format";
 import { HOSTS, type HostView } from "../../utils/hosts";
 
 defineProps<{ views: readonly HostView[] | null | undefined; hostIndex: number }>();
@@ -30,9 +31,10 @@ const { copied, copy } = useCopied();
 
       <h1 class="hero-title">Write the tool once. <span>Every host gets it.</span></h1>
       <p class="hero-lead">
-        MCP wants an inputSchema, Pi wants parameters, OMP swaps your TypeBox for its own and the AI
-        SDK wants something else again. Same tool, four dialects, and they drift the moment you fix
-        one and forget the rest. So don't keep four. Define it here and let the adapters do the
+        MCP wants an inputSchema, Pi wants parameters, OMP swaps your TypeBox for its own, OpenCode
+        wants an input and the AI SDK wants something else again. Same tool,
+        {{ spellOut(HOSTS.length) }} dialects, and they drift the moment you fix one and forget the
+        rest. So don't keep {{ spellOut(HOSTS.length) }}. Define it here and let the adapters do the
         paperwork.
       </p>
 

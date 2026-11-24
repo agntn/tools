@@ -86,7 +86,7 @@ const CHANNEL: Record<HostAnswer["channel"], string> = {
 </script>
 
 <template>
-  <section class="tool-console console-wide playground" aria-label="One call, sent to four hosts">
+  <section class="tool-console console-wide playground" aria-label="One call, sent to every host">
     <span class="console-cross console-cross-tl" aria-hidden="true">+</span>
     <span class="console-cross console-cross-br" aria-hidden="true">+</span>
 
@@ -159,7 +159,7 @@ const CHANNEL: Record<HostAnswer["channel"], string> = {
     <ConsoleResponse v-if="answers" :title="call" :text="answers.mcp.text" source="MCP content[0].text" />
 
     <footer class="console-footer console-footer-plain">
-      <span>createMcpServer · registerPiTools · registerOmpTools · toAiTool</span>
+      <span>{{ HOSTS.map((host) => host.adapter).join(" · ") }}</span>
       <span class="console-meta">nothing leaves the tab</span>
     </footer>
   </section>

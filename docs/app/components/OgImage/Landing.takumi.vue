@@ -11,7 +11,7 @@ defineProps<{ title?: string; description?: string }>();
 
 const { version } = rootPackage;
 const TAGLINE =
-  "One tool definition for MCP and Pi and OMP and the AI SDK. The adapters do the paperwork.";
+  "One tool definition for MCP and Pi and OMP and OpenCode and the AI SDK. The adapters do the paperwork.";
 
 /** The same three readouts as the hero, from the same sources. */
 const METRICS = [

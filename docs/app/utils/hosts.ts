@@ -5,19 +5,21 @@
 
 import { validateInput, type ToolDefinition } from "@agntn/tools";
 import { registerOmpTools } from "@agntn/tools/omp";
+import { registerOpencodeTools } from "@agntn/tools/opencode";
 import { registerPiTools } from "@agntn/tools/pi";
 
 import rootPackage from "../../../package.json" with { type: "json" };
 import { slugTool } from "./demo-tool";
 
-export type HostKey = "mcp" | "pi" | "omp" | "ai";
+export type HostKey = "mcp" | "pi" | "omp" | "ai" | "opencode";
 
-/** The four hosts, in the order every panel walks them. */
+/** The hosts, in the order every panel walks them. */
 export const HOSTS: readonly { key: HostKey; name: string; short: string; icon: string; adapter: string }[] = [
   { key: "mcp", name: "MCP server", short: "MCP", icon: "i-lucide-plug", adapter: "createMcpServer" },
   { key: "pi", name: "Pi extension", short: "Pi", icon: "i-lucide-pi", adapter: "registerPiTools" },
   { key: "omp", name: "OMP extension", short: "OMP", icon: "i-lucide-terminal", adapter: "registerOmpTools" },
   { key: "ai", name: "AI SDK tool", short: "AI SDK", icon: "i-lucide-sparkles", adapter: "toAiTool" },
+  { key: "opencode", name: "OpenCode plugin", short: "OpenCode", icon: "i-lucide-code-xml", adapter: "registerOpencodeTools" },
 ];
 
 /** Where each host's adapter lives, what it needs installed and how a tool reaches it. */
@@ -56,6 +58,14 @@ export const HOST_META: Record<
     schema: "jsonSchema() + the core validator",
     failure: "thrown, tool error",
     blurb: "An AI SDK tool whose output is the details plus the text",
+  },
+  opencode: {
+    to: "/hosts/opencode",
+    entry: "@agntn/tools/opencode",
+    peer: "@opencode/plugin",
+    schema: "input, same JSON Schema",
+    failure: "thrown",
+    blurb: "A plugin's tools, with OpenCode's permission rules checked before every write",
   },
 };
 
@@ -116,6 +126,27 @@ export function ompRegistration(tool: ToolDefinition = slugTool): Registered {
   registerOmpTools(pi as unknown as Parameters<typeof registerOmpTools>[0], [tool], {
     Text: Text as unknown as Parameters<typeof registerOmpTools>[2]["Text"],
   });
+  return captured!;
+}
+
+/**
+ * Registers the tool on an OpenCode double that, like the default rules, lets every write through.
+ *
+ * @param {ToolDefinition} tool - Tool to register.
+ * @returns {Promise<Registered>} The object passed to `editor.add`.
+ */
+export async function opencodeRegistration(tool: ToolDefinition = slugTool): Promise<Registered> {
+  let captured: Registered | undefined;
+  const ctx = {
+    tool: {
+      transform: async (callback: (editor: { add: (info: Registered) => void }) => void) => {
+        callback({ add: (info) => (captured = info) });
+        return { dispose: async () => {} };
+      },
+    },
+    permission: { assert: async () => {} },
+  };
+  await registerOpencodeTools(ctx as unknown as Parameters<typeof registerOpencodeTools>[0], [tool]);
   return captured!;
 }
 
@@ -199,15 +230,37 @@ async function callAi(tool: ToolDefinition, args: unknown): Promise<HostAnswer> 
   }
 }
 
+/** Calls the tool the way OpenCode does: the registered `execute`, which throws on a failure. */
+async function callOpencode(tool: ToolDefinition, args: unknown): Promise<HostAnswer> {
+  const context = {
+    sessionID: "ses_1",
+    agent: "build",
+    messageID: "msg_1",
+    id: "call_1",
+    signal: new AbortController().signal,
+    progress: async () => {},
+  };
+  try {
+    const result = (await (await opencodeRegistration(tool)).execute(args, context)) as {
+      content: string | { type: string; text?: string }[];
+    };
+    const text = typeof result.content === "string" ? result.content : contentText(result);
+    return { failed: false, channel: "result", text };
+  } catch (error) {
+    return { failed: true, channel: "thrown", text: thrown(error) };
+  }
+}
+
 const CALLERS: Record<HostKey, (tool: ToolDefinition, args: unknown) => Promise<HostAnswer>> = {
   mcp: callMcp,
   pi: callPi,
   omp: callOmp,
   ai: callAi,
+  opencode: callOpencode,
 };
 
 /**
- * Sends the same arguments to all four hosts.
+ * Sends the same arguments to every host.
  *
  * @param {unknown} args - Tool arguments, as a host would receive them.
  * @param {ToolDefinition} tool - Tool to call.
@@ -228,7 +281,7 @@ export async function callEveryHost(
 export const CONCEPTS = [
   { key: "name", candidates: ["name"] },
   { key: "label", candidates: ["title", "label"] },
-  { key: "schema", candidates: ["inputSchema", "parameters"] },
+  { key: "schema", candidates: ["inputSchema", "parameters", "input"] },
   { key: "effect", candidates: ["annotations", "approval", "needsApproval"] },
   { key: "prompt", candidates: ["promptSnippet"] },
   { key: "run", candidates: ["execute"] },
@@ -272,7 +325,7 @@ function printRegistration(value: object): string {
 }
 
 /**
- * Builds the four host views from the adapters themselves.
+ * Builds one view per host from the adapters themselves.
  *
  * @param {ToolDefinition} tool - Tool to register.
  * @returns {Promise<HostView[]>} One view per host, in `HOSTS` order.
@@ -299,6 +352,7 @@ export async function hostViews(tool: ToolDefinition = slugTool): Promise<HostVi
     .join(", ");
   const pi = piRegistration(tool);
   const omp = ompRegistration(tool);
+  const opencode = await opencodeRegistration(tool);
   const ai = toAiTool(tool);
   const aiSchema = (await asSchema(ai.inputSchema).jsonSchema) as { properties?: object };
 
@@ -352,6 +406,21 @@ export async function hostViews(tool: ToolDefinition = slugTool): Promise<HostVi
       ],
       registration: printRegistration({ ...ai, inputSchema: aiSchema }),
       fields: fieldsOf(ai),
+    },
+    {
+      key: "opencode",
+      rows: [
+        { label: "name", value: String(opencode.name) },
+        {
+          label: "permission",
+          value: tool.effect === "read" ? "none, it's a read" : `asks as "${tool.name}"`,
+          accent: true,
+        },
+        { label: "input", value: keys },
+        { label: "failure", value: "thrown" },
+      ],
+      registration: printRegistration(opencode),
+      fields: fieldsOf(opencode),
     },
   ];
 }

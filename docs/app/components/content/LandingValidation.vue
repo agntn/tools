@@ -28,7 +28,7 @@ const verdict = computed(() => {
 <template>
   <section
     class="tool-console landing-check"
-    aria-label="One call, four hosts"
+    aria-label="One call, every host"
     @mouseenter="emit('pause', true)"
     @mouseleave="emit('pause', false)"
     @focusin="emit('pause', true)"
