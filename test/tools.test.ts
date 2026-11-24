@@ -3348,3 +3348,119 @@ describe("a question the tool forgot to wait for", () => {
     expect(drawn).toEqual(["input Pick ()"]);
   });
 });
+
+/**
+ * A client on a server whose guard is `refuse`.
+ *
+ * @param tools - Tools to serve.
+ * @param refuse - The guard.
+ * @param client - The client to connect, a plain one by default.
+ * @returns {Promise<Client>} The connected client.
+ */
+async function guardedClient(
+  tools: readonly ToolDefinition[],
+  refuse: () => string | undefined | Promise<string | undefined>,
+  client = new Client({ name: "test", version: "0.0.0" }),
+): Promise<Client> {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createMcpServer({ name: "demo", version: "0.0.0" }, tools, { refuse });
+  open.push(client, server);
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  return client;
+}
+
+/* The reason the guards in these tests give. */
+const RESTART = "src/ changed under this server, restart it to load the new code";
+
+/* A write that counts its runs. */
+let stored = 0;
+const store = defineTool({
+  name: "demo_store",
+  title: "Demo Store",
+  description: "Store a word.",
+  effect: "write",
+  input: Type.Object({ word: Type.String() }, { additionalProperties: false }),
+  execute({ word }): ToolResult<null> {
+    stored++;
+    return { content: [{ type: "text", text: `stored ${word}` }], details: null };
+  },
+});
+
+describe("a guard that turns calls away", () => {
+  it("refuses before the name, the schema and the tool", async () => {
+    stored = 0;
+    const client = await guardedClient([store], async () => RESTART);
+
+    for (const call of [
+      { name: "demo_store", arguments: { word: "a" } },
+      { name: "nope", arguments: {} },
+      { name: "demo_store", arguments: { word: 1 } },
+    ]) {
+      expect(await client.callTool(call)).toEqual({
+        isError: true,
+        content: [{ type: "text", text: RESTART }],
+      });
+    }
+    expect(stored).toBe(0);
+  });
+
+  it("drops the answer of a write the guard flipped under, saying it may have run", async () => {
+    stored = 0;
+    const client = await guardedClient([store], () => (stored > 0 ? RESTART : undefined));
+
+    expect(await client.callTool({ name: "demo_store", arguments: { word: "a" } })).toEqual({
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `${RESTART}\nThe call's answer was dropped, and it may have run. Check before retrying.`,
+        },
+      ],
+    });
+    expect(stored).toBe(1);
+  });
+
+  it.each([
+    ["a read", echo, { word: "hi" }],
+    ["an idempotent write", { ...store, name: "demo_put", idempotent: true }, { word: "a" }],
+  ])("drops the answer of %s with the reason alone", async (_kind, tool, args) => {
+    let calls = 0;
+    const client = await guardedClient([tool], () => (calls++ > 0 ? RESTART : undefined));
+
+    expect(await client.callTool({ name: tool.name, arguments: args })).toEqual({
+      isError: true,
+      content: [{ type: "text", text: RESTART }],
+    });
+  });
+
+  it("drops a question with the reason alone, since nothing ran past it", async () => {
+    let calls = 0;
+    const { client, seen } = formClient([]);
+    const writer = { ...asker, name: "demo_ask_write", effect: "write" } as const;
+    await guardedClient([writer], () => (calls++ > 0 ? RESTART : undefined), client);
+
+    expect(firstText(await client.callTool({ name: writer.name, arguments: {} }))).toBe(RESTART);
+    expect(seen).toEqual([]);
+  });
+
+  it("keeps progress and questions on a server with a guard that lets calls through", async () => {
+    const updates: unknown[] = [];
+    const { client, seen } = formClient([
+      { action: "accept", content: { color: "red" } },
+      { action: "accept", content: { count: 2, loud: true } },
+    ]);
+    await guardedClient([slow, asker], () => undefined, client);
+
+    expect(
+      await client.callTool(
+        { name: "demo_slow", arguments: {} },
+        { onprogress: (update) => updates.push(update) },
+      ),
+    ).toEqual({ content: [{ type: "text", text: "progress on" }] });
+    expect(updates).toHaveLength(3);
+    expect(firstText(await client.callTool({ name: "demo_ask", arguments: {} }))).toBe(
+      "red x2 tags=- loud=true note=-",
+    );
+    expect(seen).toHaveLength(2);
+  });
+});
