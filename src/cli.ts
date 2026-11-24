@@ -24,6 +24,7 @@ import {
   validateInput,
   type InputIssue,
   type ToolCallContext,
+  type ToolCliHints,
   type ToolDefinition,
   type ToolProgress,
   type ToolResult,
@@ -109,6 +110,8 @@ interface Field {
   /** Items of a `rest` array, where each word stays one item instead of joining the others. */
   readonly restItems: SchemaNode | undefined;
   readonly short: string | undefined;
+  /** Long flags from the `flags` hint, left out of the help. */
+  readonly aliases: readonly string[];
   readonly stdin: boolean;
 }
 
@@ -222,7 +225,24 @@ interface CliHints {
   readonly plain: readonly string[];
   readonly rest: readonly string[];
   readonly short: Readonly<Record<string, string>>;
+  readonly flags: Readonly<Record<string, readonly string[]>>;
   readonly stdin: readonly string[];
+}
+
+/**
+ * @param cli - The tool's `cli` hint.
+ * @returns {CliHints} The hint with empty defaults.
+ */
+function hintDefaults(cli: ToolCliHints): CliHints {
+  const rest = cli.rest === undefined ? [] : [cli.rest];
+  return {
+    positional: [...(cli.positional ?? []), ...rest],
+    plain: cli.plain ?? [],
+    rest,
+    short: cli.short ?? {},
+    flags: cli.flags ?? {},
+    stdin: cli.stdin ?? [],
+  };
 }
 
 /**
@@ -231,17 +251,15 @@ interface CliHints {
  * @throws {ToolDefinitionError} When a hint names a property the tool lacks, or a positional twice.
  */
 function cliHints(tool: ToolDefinition): CliHints {
-  const cli = tool.cli ?? {};
-  const rest = cli.rest === undefined ? [] : [cli.rest];
-  const hints = {
-    positional: [...(cli.positional ?? []), ...rest],
-    plain: cli.plain ?? [],
-    rest,
-    short: cli.short ?? {},
-    stdin: cli.stdin ?? [],
-  };
+  const hints = hintDefaults(tool.cli ?? {});
   const properties = tool.input.properties as Readonly<Record<string, unknown>>;
-  const named = [...hints.positional, ...hints.plain, ...Object.keys(hints.short), ...hints.stdin];
+  const named = [
+    ...hints.positional,
+    ...hints.plain,
+    ...Object.keys(hints.short),
+    ...Object.keys(hints.flags),
+    ...hints.stdin,
+  ];
   for (const key of named) {
     if (!Object.hasOwn(properties, key)) {
       throw new ToolDefinitionError(`${tool.name}: cli hint names unknown property ${key}`);
@@ -270,6 +288,15 @@ function assertPositionals(tool: ToolDefinition, hints: CliHints): void {
 }
 
 /**
+ * @param record - A hint by property.
+ * @param key - Property to look up.
+ * @returns {T | undefined} Its own entry, never a prototype's.
+ */
+function ownEntry<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
+/**
  * Reads a tool's schema and hints into command line fields.
  *
  * @param tool - Tool to read.
@@ -278,7 +305,7 @@ function assertPositionals(tool: ToolDefinition, hints: CliHints): void {
  */
 function toolFields(tool: ToolDefinition): Field[] {
   const properties = tool.input.properties as Readonly<Record<string, SchemaNode>>;
-  const { positional, plain, rest, short, stdin } = cliHints(tool);
+  const { positional, plain, rest, short, flags: aliases, stdin } = cliHints(tool);
   const keys = [
     ...positional,
     ...Object.keys(properties).filter((key) => !positional.includes(key)),
@@ -296,7 +323,8 @@ function toolFields(tool: ToolDefinition): Field[] {
       plain: plain.includes(key),
       rest: rest.includes(key),
       restItems: rest.includes(key) ? textItems(properties[key] ?? {}) : undefined,
-      short: Object.hasOwn(short, key) ? short[key] : undefined,
+      short: ownEntry(short, key),
+      aliases: ownEntry(aliases, key) ?? [],
       stdin: stdin.includes(key),
     };
     assertField(tool, field, !field.positional && flags.has(field.flag));
@@ -312,23 +340,24 @@ function toolFields(tool: ToolDefinition): Field[] {
 /**
  * @param tool - Tool the field belongs to.
  * @param field - Field to check.
+ * @param flag - Its own flag or one from the `flags` hint.
  * @throws {ToolDefinitionError} When no word can spell the flag, or it is reserved or reads as a negation.
  */
-function assertFlag(tool: ToolDefinition, field: Field): void {
-  if (!FLAG_WORD.test(field.flag)) {
+function assertFlag(tool: ToolDefinition, field: Field, flag: string): void {
+  if (!FLAG_WORD.test(flag)) {
     throw new ToolDefinitionError(
-      `${tool.name}: property ${JSON.stringify(field.key)} gives the flag ${JSON.stringify(field.flag)}, which must match ${FLAG_WORD}`,
+      `${tool.name}: property ${JSON.stringify(field.key)} gives the flag ${JSON.stringify(flag)}, which must match ${FLAG_WORD}`,
     );
   }
-  if (field.kind === "boolean" && field.flag.startsWith("no-")) {
+  if (field.kind === "boolean" && flag.startsWith("no-")) {
     // `util.parseArgs` reads `--no-cache` as `cache` negated, never as a flag `no-cache`.
     throw new ToolDefinitionError(
-      `${tool.name}: boolean property ${field.key} cannot take a flag starting with no-; name the positive and --no-${field.flag.slice(3)} negates it`,
+      `${tool.name}: boolean property ${field.key} cannot take a flag starting with no-; name the positive and --no-${flag.slice(3)} negates it`,
     );
   }
-  if (RESERVED_FLAGS.has(field.flag)) {
+  if (RESERVED_FLAGS.has(flag)) {
     throw new ToolDefinitionError(
-      `${tool.name}: property ${field.key} takes the reserved flag --${field.flag}`,
+      `${tool.name}: property ${field.key} takes the reserved flag --${flag}`,
     );
   }
 }
@@ -341,7 +370,8 @@ function assertFlag(tool: ToolDefinition, field: Field): void {
  */
 function assertField(tool: ToolDefinition, field: Field, taken: boolean): void {
   // A positional is never an option: its key needs no flag spelling.
-  if (!field.positional) assertFlag(tool, field);
+  if (!field.positional) assertFlag(tool, field, field.flag);
+  assertAliases(tool, field);
   if (taken) {
     throw new ToolDefinitionError(`${tool.name}: two properties take the flag --${field.flag}`);
   }
@@ -351,6 +381,18 @@ function assertField(tool: ToolDefinition, field: Field, taken: boolean): void {
     );
   }
   assertTextHints(tool, field);
+}
+
+/**
+ * @param tool - Tool the field belongs to.
+ * @param field - Field to check.
+ * @throws {ToolDefinitionError} When its `flags` hint is no list, or one of them can't be a flag.
+ */
+function assertAliases(tool: ToolDefinition, field: Field): void {
+  if (!Array.isArray(field.aliases as unknown)) {
+    throw new ToolDefinitionError(`${tool.name}: flags of ${field.key} must be a list of names`);
+  }
+  for (const alias of field.aliases) assertFlag(tool, field, alias);
 }
 
 /**
@@ -425,11 +467,14 @@ function assertRequiredPositionalsFirst(tool: ToolDefinition, fields: readonly F
  */
 function assertOneOptionPerSpelling(tool: ToolDefinition, fields: readonly Field[]): void {
   const owners = new Map<string, string>();
-  for (const field of fields.filter((each) => !each.positional)) {
-    const negation = field.kind === "boolean" ? [`--no-${field.flag}`] : [];
-    const short = field.short === undefined ? [] : [`-${field.short}`];
-    for (const spelling of [`--${field.flag}`, ...negation, ...short]) {
+  for (const field of fields) {
+    for (const spelling of spellings(field)) {
       const owner = owners.get(spelling);
+      if (owner === field.key) {
+        throw new ToolDefinitionError(
+          `${tool.name}: property ${owner} answers to ${spelling} twice`,
+        );
+      }
       if (owner !== undefined) {
         throw new ToolDefinitionError(
           `${tool.name}: properties ${owner} and ${field.key} both answer to ${spelling}`,
@@ -438,6 +483,25 @@ function assertOneOptionPerSpelling(tool: ToolDefinition, fields: readonly Field
       owners.set(spelling, field.key);
     }
   }
+}
+
+/**
+ * @param field - A field of the command.
+ * @returns {string[]} Its long flags; a positional has only the `flags` hint's.
+ */
+function longFlags(field: Field): string[] {
+  return [...(field.positional ? [] : [field.flag]), ...field.aliases];
+}
+
+/**
+ * @param field - A field of the command.
+ * @returns {string[]} Every option word that names it.
+ */
+function spellings(field: Field): string[] {
+  const long = longFlags(field);
+  const negation = field.kind === "boolean" ? long.map((flag) => `--no-${flag}`) : [];
+  const short = field.short === undefined ? [] : [`-${field.short}`];
+  return [...long.map((flag) => `--${flag}`), ...negation, ...short];
 }
 
 /**
@@ -526,7 +590,7 @@ interface ParsedWords {
  * a whole word are options. A dashed word that spells none fills a free
  * positional ({@link takeDashedText}); past that, an unknown option, a missing
  * value, a value given twice or a positional too many is a failure, never a
- * skipped word.
+ * skipped word. A positional set by its flag leaves its place to the next one.
  *
  * @param rawArgs - Words after the command name.
  * @param fields - The command's fields.
@@ -539,9 +603,7 @@ function parseWords(
   takesJson: boolean,
 ): ParsedWords {
   const entries: Array<[string, Field | "json"]> = [
-    ...fields
-      .filter((field) => !field.positional)
-      .map((field): [string, Field] => [field.flag, field]),
+    ...fields.flatMap((field) => longFlags(field).map((flag): [string, Field] => [flag, field])),
     ...(takesJson ? [["json", "json"] as [string, "json"]] : []),
   ];
   const options: Readonly<Record<string, Field | "json">> = Object.fromEntries(entries);
@@ -568,22 +630,27 @@ function parseWords(
   const ordered = inLineOrder(tokens, origins, texts);
   const positionals = ordered.map(([, word]) => word);
   const values = emptyRecord<RawValue>();
-  const errors = [...landedInPlain(fields, ordered, texts), ...refused].map((word) =>
-    unknownOption(options, word),
-  );
+  const misread: string[] = [];
   const flags = new Set<string>();
   for (const token of tokens) {
     if (token.kind !== "option") continue;
     const read = readOption(options, token, args[token.index] ?? "", Object.keys(values));
-    if ("error" in read) errors.push(read.error);
+    if ("error" in read) misread.push(read.error);
     else if ("flag" in read) flags.add(read.flag);
     else values[read.key] = read.value;
   }
+  const open = fields.filter((field) => !Object.hasOwn(values, field.key));
+  const errors = [
+    ...[...landedInPlain(open, ordered, texts), ...refused].map((word) =>
+      unknownOption(options, word),
+    ),
+    ...misread,
+  ];
   return {
-    values: Object.assign(values, positionalValues(fields, positionals)),
+    values: Object.assign(values, positionalValues(open, positionals)),
     json: flags.has("json"),
     help: flags.has("help"),
-    errors: [...new Set(errors.length > 0 ? errors : extraPositionals(fields, positionals))],
+    errors: [...new Set(errors.length > 0 ? errors : extraPositionals(open, positionals))],
   };
 }
 
@@ -641,11 +708,21 @@ function scanWords(
     const word = rawArgs[index] ?? "";
     if (word === "--") return { dashed, plain: plain + rawArgs.length - index - 1 };
     const kind = wordKind(word, options);
-    if (kind === "plain") plain++;
-    else if (kind === "text") dashed.push(index);
-    else if (kind === "valued") index++;
+    if (kind === "text") dashed.push(index);
+    else if (kind === "plain" || fillsPositional(word, options)) plain++;
+    if (kind === "valued") index++;
   }
   return { dashed, plain };
+}
+
+/**
+ * @param word - One word before `--`.
+ * @param options - Option fields by flag, and `--json` when the command takes it.
+ * @returns {boolean} Whether it sets a positional through a flag.
+ */
+function fillsPositional(word: string, options: Readonly<Record<string, Field | "json">>): boolean {
+  const field = word.startsWith("--") ? longField(word.slice(2), options) : undefined;
+  return typeof field === "object" && field.positional;
 }
 
 /**
@@ -834,7 +911,7 @@ function optionField(
 }
 
 /**
- * `--flag`, `--no-flag` for a boolean, or the short flag as a whole word only,
+ * A long flag, its `--no-` form for a boolean, or the short flag as a whole word only,
  * since `util.parseArgs` would read a mistyped `-provider` as `-p rovider`.
  *
  * @param field - Field the token's name points to.
@@ -843,21 +920,22 @@ function optionField(
  * @returns {boolean} Whether the token is a spelling the field takes.
  */
 function spells(field: Field, token: OptionToken, word: string): boolean {
-  if (token.rawName === `--${field.flag}`) return true;
   if (field.short !== undefined && token.rawName === `-${field.short}`)
     return word === token.rawName;
-  return field.kind === "boolean" && token.rawName === `--no-${field.flag}`;
+  return spellings(field).includes(token.rawName);
 }
 
 /**
  * @param options - Option fields by flag, and `--json` when the command takes it.
  * @param word - The command line word that names no option.
- * @returns {string} The failure, with every flag the command takes.
+ * @returns {string} The failure, with every flag the help shows.
  */
 function unknownOption(options: Readonly<Record<string, Field | "json">>, word: string): string {
-  const flags = Object.entries(options).map(([flag, each]) =>
-    each === "json" || each.short === undefined ? `--${flag}` : `--${flag} (-${each.short})`,
-  );
+  const flags = Object.entries(options)
+    .filter(([flag, each]) => each === "json" || (!each.positional && flag === each.flag))
+    .map(([flag, each]) =>
+      each === "json" || each.short === undefined ? `--${flag}` : `--${flag} (-${each.short})`,
+    );
   const takes = flags.length > 0 ? flags.join(", ") : "no options";
   return `Invalid arguments: unknown option ${JSON.stringify(word)}; takes ${takes}`;
 }
@@ -882,10 +960,21 @@ function readOption(
       ? { error: `Invalid arguments: ${token.rawName} takes no value` }
       : { flag: field };
   }
+  const flag = typedFlag(field, token);
   const problem = optionProblem(field, token, seen.includes(field.key));
-  if (problem !== undefined) return { error: `Invalid arguments: --${field.flag} ${problem}` };
-  const value = field.kind === "boolean" ? token.rawName !== `--no-${field.flag}` : token.value;
+  if (problem !== undefined) return { error: `Invalid arguments: --${flag} ${problem}` };
+  const value = field.kind === "boolean" ? token.rawName !== `--no-${flag}` : token.value;
   return { key: field.key, value: value ?? "" };
+}
+
+/**
+ * @param field - The option's field.
+ * @param token - Its token.
+ * @returns {string} The long flag as typed; its own for a short one.
+ */
+function typedFlag(field: Field, token: OptionToken): string {
+  const typed = (flag: string) => token.rawName === `--${flag}` || token.rawName === `--no-${flag}`;
+  return field.aliases.find(typed) ?? field.flag;
 }
 
 /**
@@ -897,9 +986,8 @@ function readOption(
 function optionProblem(field: Field, token: OptionToken, seen: boolean): string | undefined {
   if (seen) return "given more than once";
   if (field.kind === "boolean") {
-    return token.inlineValue === true
-      ? `takes no value; use --${field.flag} or --no-${field.flag}`
-      : undefined;
+    const flag = typedFlag(field, token);
+    return token.inlineValue === true ? `takes no value; use --${flag} or --no-${flag}` : undefined;
   }
   return token.value === undefined ? "needs a value" : undefined;
 }

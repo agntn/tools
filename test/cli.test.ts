@@ -1251,6 +1251,137 @@ describe("CLI short flags and rest", () => {
   });
 });
 
+describe("CLI flag aliases", () => {
+  const list = defineTool({
+    name: "chains_list",
+    title: "List chains",
+    description: "List chains.",
+    effect: "read",
+    input: Type.Object(
+      {
+        family: Type.Optional(Type.String()),
+        query: Type.Optional(Type.String()),
+        provider: Type.Optional(Type.String()),
+        exact: Type.Optional(Type.Boolean()),
+      },
+      { additionalProperties: false },
+    ),
+    cli: {
+      positional: ["family", "query"],
+      flags: { family: ["type", "family"], provider: ["source"], exact: ["strict"] },
+    },
+    execute: (input) => ({
+      content: [{ type: "text", text: JSON.stringify(input) }],
+      details: null,
+    }),
+  });
+  const cli = (tool: ToolDefinition = list): CliOptions => ({
+    ...options,
+    tools: [tool],
+    default: undefined,
+    fallback: undefined,
+  });
+  const stdout = async (argv: readonly string[]) => (await run(argv, cli())).stdout;
+
+  it("keeps an old flag name on a positional", async () => {
+    for (const argv of [
+      ["list", "utxo"],
+      ["list", "--type", "utxo"],
+      ["list", "--type=utxo"],
+      ["list", "--family", "utxo"],
+    ]) {
+      expect(await stdout(argv)).toBe('{"family":"utxo"}\n');
+    }
+  });
+
+  it("hands the place of a positional set by its flag to the next one", async () => {
+    expect(await stdout(["list", "--type", "utxo", "btc"])).toBe(
+      '{"family":"utxo","query":"btc"}\n',
+    );
+    expect(await stdout(["list", "btc", "--type", "utxo"])).toBe(
+      '{"family":"utxo","query":"btc"}\n',
+    );
+    expect(await stdout(["list", "--type", "utxo", "-5"])).toBe('{"family":"utxo","query":"-5"}\n');
+    expect((await run(["list", "evm", "btc", "--type", "utxo"], cli())).stderr).toBe(
+      "Invalid arguments: 1 unexpected positional argument\n",
+    );
+    expect((await run(["list", "--type", "utxo", "btc", "-5"], cli())).stderr).toBe(
+      'Invalid arguments: unknown option "-5"; takes --provider, --exact, --json\n',
+    );
+  });
+
+  it("keeps old names on options and booleans", async () => {
+    expect(await stdout(["list", "--source", "osm", "--strict"])).toBe(
+      '{"provider":"osm","exact":true}\n',
+    );
+    expect(await stdout(["list", "--no-strict"])).toBe('{"exact":false}\n');
+    expect(await stdout(["list", "--provider", "osm", "--no-exact"])).toBe(
+      '{"provider":"osm","exact":false}\n',
+    );
+  });
+
+  it("names the flag the line typed when it fails", async () => {
+    const tool = cli();
+    const execute = vi.spyOn(list, "execute");
+    const stderr = async (argv: readonly string[]) => (await run(argv, tool)).stderr;
+    expect(await stderr(["list", "--source", "a", "--provider", "b"])).toBe(
+      "Invalid arguments: --provider given more than once\n",
+    );
+    expect(await stderr(["list", "--type", "a", "--type", "b"])).toBe(
+      "Invalid arguments: --type given more than once\n",
+    );
+    expect(await stderr(["list", "--type"])).toBe("Invalid arguments: --type needs a value\n");
+    expect(await stderr(["list", "--strict=yes"])).toBe(
+      "Invalid arguments: --strict takes no value; use --strict or --no-strict\n",
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("leaves the old names out of the help and the unknown option line", async () => {
+    const { stdout: help } = await run(["list", "--help"], cli());
+    expect(help).toContain("USAGE demo list [OPTIONS] [FAMILY] [QUERY]\n");
+    for (const old of ["--type", "--family", "--source", "--strict"])
+      expect(help).not.toContain(old);
+    expect((await run(["list", "evm", "btc", "--nope"], cli())).stderr).toBe(
+      'Invalid arguments: unknown option "--nope"; takes --provider, --exact, --json\n',
+    );
+  });
+
+  it("rejects old names that clash or can't be typed", () => {
+    const build = (flags: Readonly<Record<string, readonly string[]>>) => () =>
+      createCli(cli({ ...list, cli: { positional: ["family"], flags } }));
+    expect(build({ nope: ["x"] })).toThrow("chains_list: cli hint names unknown property nope");
+    expect(build({ family: "type" } as unknown as Record<string, string[]>)).toThrow(
+      "chains_list: flags of family must be a list of names",
+    );
+    expect(build({ provider: ["exact"] })).toThrow(
+      "chains_list: properties provider and exact both answer to --exact",
+    );
+    expect(build({ family: ["source"], provider: ["source"] })).toThrow(
+      "chains_list: properties family and provider both answer to --source",
+    );
+    expect(build({ exact: ["provider"] })).toThrow(
+      "chains_list: properties provider and exact both answer to --provider",
+    );
+    expect(build({ provider: ["provider"] })).toThrow(
+      "chains_list: property provider answers to --provider twice",
+    );
+    expect(build({ family: ["type", "type"] })).toThrow(
+      "chains_list: property family answers to --type twice",
+    );
+    expect(build({ query: ["json"] })).toThrow(
+      "chains_list: property query takes the reserved flag --json",
+    );
+    expect(build({ provider: ["Source"] })).toThrow(/gives the flag "Source", which must match/);
+    expect(build({ exact: ["no-strict"] })).toThrow(
+      "chains_list: boolean property exact cannot take a flag starting with no-",
+    );
+    expect(build({ exact: ["cached"], provider: ["no-cached"] })).toThrow(
+      "chains_list: properties provider and exact both answer to --no-cached",
+    );
+  });
+});
+
 describe("CLI dashed text", () => {
   const decode = defineTool({
     name: "demo_decode",
