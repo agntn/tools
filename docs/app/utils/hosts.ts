@@ -229,7 +229,7 @@ export const CONCEPTS = [
   { key: "name", candidates: ["name"] },
   { key: "label", candidates: ["title", "label"] },
   { key: "schema", candidates: ["inputSchema", "parameters"] },
-  { key: "effect", candidates: ["annotations", "approval"] },
+  { key: "effect", candidates: ["annotations", "approval", "needsApproval"] },
   { key: "prompt", candidates: ["promptSnippet"] },
   { key: "run", candidates: ["execute"] },
 ] as const;
