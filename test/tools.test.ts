@@ -42,6 +42,7 @@ import {
   Type,
   validateInput,
   invokeTool,
+  lazy,
   resultText,
   type Icon,
   type ToolAnswer,
@@ -897,6 +898,42 @@ describe("cancelling", () => {
     },
   );
 
+  it.each(["write", "destructive", "exec"] as const)(
+    "never starts a %s that arrives cancelled",
+    async (effect) => {
+      parked = undefined;
+      const call = invokeTool(parking(effect), {}, { signal: AbortSignal.abort() });
+
+      expect(await outcome(() => call)).toMatchObject({ name: "AbortError" });
+      expect(parked).toBeUndefined();
+    },
+  );
+
+  it("drops a write cancelled while its executors are still loading", async () => {
+    const importing = Promise.withResolvers<{ readonly write: () => void }>();
+    const loadOperations = lazy(async () => await importing.promise);
+    const writes: string[] = [];
+    const tool = defineTool({
+      name: "demo_config_write",
+      title: "Write Config",
+      description: "Write the config.",
+      effect: "write",
+      input: Type.Object({}),
+      async execute(_input, { signal }): Promise<ToolResult<null>> {
+        (await loadOperations(signal)).write();
+        return done;
+      },
+    });
+    const cancel = new AbortController();
+
+    const call = invokeTool(tool, {}, { signal: cancel.signal });
+    cancel.abort();
+    importing.resolve({ write: () => writes.push("config") });
+
+    await expect(call).rejects.toMatchObject({ name: "AbortError" });
+    expect(writes).toEqual([]);
+  });
+
   it.each(["Pi", "OMP"])("lets %s go when Esc cancels a read", async (host) => {
     const registered: Array<PiToolDefinition | OmpToolDefinition> = [];
     const register = (definition: PiToolDefinition | OmpToolDefinition): number =>
@@ -922,6 +959,43 @@ describe("cancelling", () => {
 
     expect(await outcome(() => call)).toMatchObject({ name: "AbortError" });
     parked?.resolve(done);
+  });
+});
+
+describe("lazy", () => {
+  it("loads once for calls that overlap", async () => {
+    const load = vi.fn(async () => await Promise.resolve({ ready: true }));
+    const operations = lazy(load);
+
+    const [first, second] = await Promise.all([operations(), operations()]);
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(second).toBe(first);
+  });
+
+  it("loads again after a failed load", async () => {
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("disk hiccup"))
+      .mockResolvedValueOnce("loaded");
+    const operations = lazy(load);
+
+    await expect(operations()).rejects.toThrow("disk hiccup");
+    expect(await operations()).toBe("loaded");
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a call cancelled during the load and keeps the module for the next", async () => {
+    const importing = Promise.withResolvers<string>();
+    const operations = lazy(async () => await importing.promise);
+    const cancel = new AbortController();
+
+    const cancelled = operations(cancel.signal);
+    cancel.abort(new Error("Esc"));
+    importing.resolve("loaded");
+
+    await expect(cancelled).rejects.toThrow("Esc");
+    expect(await operations(new AbortController().signal)).toBe("loaded");
   });
 });
 
