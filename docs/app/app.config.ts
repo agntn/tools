@@ -7,7 +7,7 @@ export default defineAppConfig({
   seo: {
     title: "@agntn/tools",
     description:
-      "One tool definition served to MCP, Pi, OMP and the AI SDK. TypeBox schema, validation on every surface, errors that stay on one line.",
+      "One tool definition served to MCP, Pi, OMP, OpenCode and the AI SDK. TypeBox schema, validation on every surface, errors that stay on one line.",
     schema: {
       type: "SoftwareApplication",
       applicationCategory: "DeveloperApplication",

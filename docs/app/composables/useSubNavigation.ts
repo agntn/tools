@@ -11,6 +11,7 @@ const NAV_ICONS: Record<string, string> = {
   "/hosts/pi": "i-lucide-pi",
   "/hosts/omp": "i-lucide-terminal",
   "/hosts/ai-sdk": "i-lucide-sparkles",
+  "/hosts/opencode": "i-lucide-code-xml",
   "/playground": "i-lucide-flask-conical",
 };
 

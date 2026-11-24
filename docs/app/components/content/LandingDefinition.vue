@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import source from "../../utils/demo-tool.ts?raw";
+import { HOSTS } from "../../utils/hosts";
 import { tokens } from "../../utils/tokens";
 
 const { copied, copy } = useCopied();
@@ -50,7 +51,7 @@ const lines = [
     </div>
 
     <footer class="console-footer console-footer-plain">
-      <span>createMcpServer · registerPiTools · registerOmpTools · toAiTool</span>
+      <span>{{ HOSTS.map((host) => host.adapter).join(" · ") }}</span>
     </footer>
   </section>
 </template>

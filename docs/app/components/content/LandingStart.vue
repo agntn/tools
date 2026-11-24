@@ -52,7 +52,7 @@ const NOTES = [
       <div class="start-copy">
         <h2 class="start-title">Start with one install</h2>
         <p class="start-lead">
-          The core, the four adapters and a bundled TypeBox, in one package. Define the tool with
+          The core, an adapter for every host and a bundled TypeBox, in one package. Define the tool with
           <code>defineTool</code>, hand the list to whichever hosts you run, done. The hosts
           themselves stay yours to install, so an MCP server doesn't drag the AI SDK along.
         </p>

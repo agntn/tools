@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import rootPackage from "../../../package.json";
+import { spellOutCapital } from "../utils/format";
 import { HOSTS } from "../utils/hosts";
 
 definePageMeta({ layout: "default" });
 
 const title = "Playground";
 const description =
-  "Send one text_slug call to a real MCP server, the Pi and OMP adapters and the AI SDK tool at once. In the browser, with the adapters themselves.";
+  "Send one text_slug call to a real MCP server, the Pi, OMP and OpenCode adapters and the AI SDK tool at once. In the browser, with the adapters themselves.";
 /** The card cuts at 160 characters, so it gets a short take, not a sentence chopped mid-word. */
-const cardDescription = "One call sent to MCP and Pi and OMP and the AI SDK at once. In the browser";
+const cardDescription = "One call sent to MCP and Pi and OMP and OpenCode and the AI SDK at once. In the browser";
 
 useSeo({
   title,
@@ -26,7 +27,7 @@ onScopeDispose(() => dropMarkdownTwin?.());
 defineOgImage(
   "Docs.takumi",
   { headline: "Playground", title, description: cardDescription },
-  { alt: "The @agntn/tools playground: one call sent to four hosts in the browser" },
+  { alt: "The @agntn/tools playground: one call sent to every host in the browser" },
 );
 </script>
 
@@ -48,11 +49,11 @@ defineOgImage(
 
         <h1 class="hero-title">
           One call. <br class="playground-break" />
-          <span>Four hosts, live.</span>
+          <span>{{ spellOutCapital(HOSTS.length) }} hosts, live.</span>
         </h1>
         <p class="hero-lead">
           Type some arguments and watch every host take them. That's a real MCP server and client
-          in your tab, not a mock, plus the Pi, OMP and AI SDK adapters. Try to make them disagree.
+          in your tab, not a mock, plus the Pi, OMP, OpenCode and AI SDK adapters. Try to make them disagree.
           They won't, and the channel is the only thing that moves.
         </p>
 

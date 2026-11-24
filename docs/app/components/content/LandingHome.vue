@@ -32,7 +32,7 @@ const { views, answers, cases, paused, hostIndex, caseIndex, step } = useLanding
     </LandingFeature>
 
     <LandingFeature
-      title="Same mistake, same answer, four hosts"
+      title="Same mistake, same answer, every host"
       to="/guide/validation"
       link="Validation and errors"
       :checks="[
@@ -46,7 +46,7 @@ const { views, answers, cases, paused, hostIndex, caseIndex, step } = useLanding
       <code class="tools-code">separator</code> gets silently dropped by a lot of tool code, and the
       call does something else than asked. Here the core checks first and every host hands the
       model the same lines. Only the channel differs. MCP says
-      <code class="tools-code">isError</code>, Pi and OMP throw, the AI SDK refuses the input.
+      <code class="tools-code">isError</code>, Pi, OMP and OpenCode throw, the AI SDK refuses the input.
       <template #visual>
         <LandingValidation
           :cases="cases"

@@ -18,6 +18,7 @@ export default defineNuxtConfig({
     "@agntn/tools/mcp": resolve(librarySource, "mcp.ts"),
     "@agntn/tools/pi": resolve(librarySource, "pi.ts"),
     "@agntn/tools/omp": resolve(librarySource, "omp.ts"),
+    "@agntn/tools/opencode": resolve(librarySource, "opencode.ts"),
     "@agntn/tools/ai": resolve(librarySource, "ai.ts"),
     "@agntn/tools": resolve(librarySource, "index.ts"),
   },
@@ -53,7 +54,7 @@ export default defineNuxtConfig({
   llms: {
     title: "@agntn/tools",
     description:
-      "One tool definition served to MCP, Pi, OMP and the AI SDK. TypeBox schema, validation on every surface, errors that stay on one line.",
+      "One tool definition served to MCP, Pi, OMP, OpenCode and the AI SDK. TypeBox schema, validation on every surface, errors that stay on one line.",
     sections: [
       {
         title: "MCP",
@@ -69,13 +70,13 @@ export default defineNuxtConfig({
       },
       {
         title: "Playground",
-        description: "One call sent to all four hosts at once, in the browser.",
+        description: "One call sent to every host at once, in the browser.",
         links: [
           {
             title: "Playground",
             href: "https://tools.agntn.dev/playground",
             description:
-              "A real MCP server, the Pi and OMP adapters and the AI SDK tool, all running in the page.",
+              "A real MCP server, the Pi, OMP and OpenCode adapters and the AI SDK tool, all running in the page.",
           },
         ],
       },
@@ -94,7 +95,7 @@ export default defineNuxtConfig({
   /** Docus pages define their own OG images; the alt text is the one thing they leave unset. */
   ogImage: {
     defaults: {
-      alt: "@agntn/tools: one tool definition for MCP, Pi, OMP and the AI SDK",
+      alt: "@agntn/tools: one tool definition for MCP, Pi, OMP, OpenCode and the AI SDK",
     },
   },
   icon: {
@@ -116,6 +117,7 @@ export default defineNuxtConfig({
         "lucide:circle-alert",
         "lucide:circle-check",
         "lucide:circle-x",
+        "lucide:code-xml",
         "lucide:copy",
         "lucide:external-link",
         "lucide:flask-conical",
