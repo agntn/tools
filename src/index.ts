@@ -75,6 +75,8 @@ export interface ToolCliHints {
   readonly plain?: readonly string[];
   /** Short flags by property, `{ limit: "n" }` for `-n 5`. Only a whole word counts. */
   readonly short?: Readonly<Record<string, string>>;
+  /** Old long flags by property, `{ family: ["type"] }` for `--type`. Positionals too. */
+  readonly flags?: Readonly<Record<string, readonly string[]>>;
   /** String properties that read stdin when given as `-`. */
   readonly stdin?: readonly string[];
   /** `false` takes `--json` away, for a command that writes its own bytes to stdout. */
