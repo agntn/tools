@@ -756,13 +756,19 @@ describe("CLI commands", () => {
       input: Type.Object({ word: Type.String() }, { additionalProperties: false }),
       cli: { positional: ["word"], verbatim: true },
       execute: ({ word }) => ({
-        content: [{ type: "text", text: word === "fail" ? `no ${marks}` : marks }],
+        content: [
+          {
+            type: "text",
+            text: word === "fail" ? `no ${marks}` : word === "bare" ? "a\u200Fb" : marks,
+          },
+        ],
         details: { marks },
         isError: word === "fail",
       }),
     });
     const cli = { ...options, tools: [...demoTools, conceal] };
     expect((await run(["conceal", "key"], cli)).stdout).toBe(marks);
+    expect((await run(["conceal", "bare"], cli)).stdout).toBe("a\u200Fb\n");
     expect((await run(["conceal", "key", "--json"], cli)).stdout).toBe(
       `{\n  "marks": "a\u200Bb\\u202ec\\u2066d\\u2069\\u200f\\u001b[31me\\r\\n"\n}\n`,
     );
