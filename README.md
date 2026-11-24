@@ -7,11 +7,11 @@
 
 🧰 Five hosts, one definition. You write the tool once. MCP, Pi, OMP, OpenCode and the AI SDK each get it the way they like it.
 
-Want to watch it happen? [tools.agntn.dev](https://tools.agntn.dev) has the docs and a playground. One call, four hosts, all live in your tab.
+Want to watch it happen? [tools.agntn.dev](https://tools.agntn.dev) has the docs and a playground. One call, MCP, Pi, OMP and the AI SDK, all live in your tab.
 
 ## Why?
 
-MCP wants an `inputSchema`. Pi wants `parameters` and a prompt snippet. OMP swaps your TypeBox for its own. The AI SDK wants yet another schema. So every tool lived in four files, and four files drift. Now it lives in one.
+MCP wants an `inputSchema`. Pi wants `parameters` and a prompt snippet. OMP swaps your TypeBox for its own. The AI SDK wants yet another schema. So every tool lived in a file per host, and those files drift. Now it lives in one.
 
 ## ✨ Features
 
