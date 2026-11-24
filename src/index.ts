@@ -137,7 +137,7 @@ export interface ToolCallContext {
    * replayed, so ask before the first effect and in the same order every time.
    */
   ask?: ToolAsk;
-  /** Pi's or OMP's `ctx`, the CLI's `CliHost`, MCP's `McpHost` or nothing. Narrow it yourself. */
+  /** Pi's or OMP's `ctx`, `CliHost`, `McpHost`, `HttpHost` or nothing. Narrow it yourself. */
   host?: unknown;
 }
 

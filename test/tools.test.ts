@@ -52,6 +52,7 @@ import {
   type ToolResult,
 } from "../src/index.ts";
 import { toH3Tools } from "../src/h3.ts";
+import { createHttpHandler } from "../src/http.ts";
 import { callTool, createMcpServer, listTools, type McpHost } from "../src/mcp.ts";
 import { callAsking, canAsk, questionRound } from "../src/mcp-answers.ts";
 import { hostAsk, requestedSchema, type HostQuestion } from "../src/questions.ts";
@@ -427,6 +428,7 @@ describe("portability", () => {
     "escapes.ts",
     "mcp-answers.ts",
     "h3.ts",
+    "http.ts",
     "toolkit.ts",
     "pi.ts",
     "omp.ts",
@@ -467,6 +469,7 @@ describe("one name, one tool", () => {
     ["listTools", () => listTools(twins)],
     ["toAiTools", () => toAiTools(twins)],
     ["toH3Tools", () => toH3Tools({ name: "demo" }, twins)],
+    ["createHttpHandler", () => createHttpHandler({ name: "demo", version: "1.0.0" }, twins)],
     ["toToolkitTools", () => toToolkitTools({ name: "demo" }, twins)],
     ["registerPiTools", () => registerPiTools(host as unknown as PiExtensionAPI, twins)],
     ["registerOmpTools", () => registerOmpTools(host as unknown as ExtensionAPI, twins, { Text })],
