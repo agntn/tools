@@ -1389,6 +1389,7 @@ function toolCommand(tool: ToolDefinition): Command {
   const fields = toolFields(tool);
   const [summary = tool.title] = tool.description.split(/(?<=[.!?])\s/, 1);
   const name = commandName(tool);
+  const print = tool.cli?.verbatim === true ? String : sanitizeText;
   return {
     name,
     word: name.slice(name.indexOf(" ") + 1),
@@ -1413,7 +1414,7 @@ function toolCommand(tool: ToolDefinition): Command {
       } else if (words.json) {
         writeLine("stdout", detailsJson(result.details));
       } else if (result.content.length > 0) {
-        writeLine("stdout", sanitizeText(resultText(result)));
+        writeLine("stdout", print(resultText(result)));
         const images = result.content.filter((block) => block.type === "image").length;
         if (images > 0) writeLine("stderr", `(${images} image block(s) not printed)`);
       }

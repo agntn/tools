@@ -746,6 +746,39 @@ describe("CLI commands", () => {
     );
   });
 
+  it("prints a verbatim command's text as written but still cleans its errors", async () => {
+    const marks = "a\u200Bb\u202Ec\u2066d\u2069\u200F\u001B[31me\r\n";
+    const conceal = defineTool({
+      name: "demo_conceal",
+      title: "Conceal",
+      description: "Hide a word in marks.",
+      effect: "read",
+      input: Type.Object({ word: Type.String() }, { additionalProperties: false }),
+      cli: { positional: ["word"], verbatim: true },
+      execute: ({ word }) => ({
+        content: [
+          {
+            type: "text",
+            text: word === "fail" ? `no ${marks}` : word === "bare" ? "a\u200Fb" : marks,
+          },
+        ],
+        details: { marks },
+        isError: word === "fail",
+      }),
+    });
+    const cli = { ...options, tools: [...demoTools, conceal] };
+    expect((await run(["conceal", "key"], cli)).stdout).toBe(marks);
+    expect((await run(["conceal", "bare"], cli)).stdout).toBe("a\u200Fb\n");
+    expect((await run(["conceal", "key", "--json"], cli)).stdout).toBe(
+      `{\n  "marks": "a\u200Bb\\u202ec\\u2066d\\u2069\\u200f\\u001b[31me\\r\\n"\n}\n`,
+    );
+    expect(await run(["conceal", "fail"], cli)).toEqual({
+      stdout: "",
+      stderr: "no a\u200Bbcde\n",
+      exitCode: 1,
+    });
+  });
+
   it("puts the package's commands next to the generated ones and guards them", async () => {
     const ownEcho = defineTool({
       name: "demo_own_echo",

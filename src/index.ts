@@ -79,6 +79,8 @@ export interface ToolCliHints {
   readonly stdin?: readonly string[];
   /** `false` takes `--json` away, for a command that writes its own bytes to stdout. */
   readonly json?: boolean;
+  /** `true` prints the text unsanitized, for a command whose product is invisible characters. */
+  readonly verbatim?: boolean;
 }
 
 /** How far a long call has come, for hosts that draw it. */
