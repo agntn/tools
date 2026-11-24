@@ -54,7 +54,7 @@ import {
 import { toH3Tools } from "../src/h3.ts";
 import { createHttpHandler } from "../src/http.ts";
 import { callTool, createMcpServer, listTools, type McpHost } from "../src/mcp.ts";
-import { callAsking, canAsk, questionRound } from "../src/mcp-answers.ts";
+import { askForm, callAsking, canAsk, questionRound, type RoundRetry } from "../src/mcp-answers.ts";
 import { hostAsk, requestedSchema, type HostQuestion } from "../src/questions.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
@@ -2757,26 +2757,58 @@ const replies = [
   { action: "accept", content: { count: 3, tags: ["b"], loud: true } },
 ];
 
+/** How a test client connects: the revision it insists on and the extensions it declares. */
+interface FormSetup {
+  /** Protocol revision to insist on, else the SDK's 2025 default. */
+  readonly pin?: string;
+  readonly extensions?: Readonly<
+    Record<string, Readonly<Record<string, Readonly<Record<string, never>>>>>
+  >;
+}
+
+/** What ChatGPT declares next to `elicitation` to get its own forms. */
+const CHATGPT = { "openai/elicitation": { form: {} } };
+
+/** `colorWire` as ChatGPT gets it: an empty core form, the fields in `_meta`. */
+const chatgptColorWire = {
+  mode: "form",
+  message: colorWire.message,
+  requestedSchema: { type: "object", properties: {} },
+  _meta: { "openai/elicitation": { requestedSchema: colorWire.requestedSchema } },
+};
+
 /**
  * A client that fills forms from `script` and keeps each form it was shown in `seen`.
  *
+ * Of a form's `_meta`, only ChatGPT's key lands in `seen`.
+ *
  * @param script - Replies in order.
- * @param pin - Protocol revision to insist on, else the SDK's 2025 default.
+ * @param setup - The revision to insist on and the extensions to declare.
  * @returns {{ client: Client; seen: unknown[] }} Unconnected client and its record.
  */
-function formClient(script: readonly unknown[], pin?: string): { client: Client; seen: unknown[] } {
+function formClient(
+  script: readonly unknown[],
+  setup: FormSetup = {},
+): { client: Client; seen: unknown[] } {
+  const { pin, extensions } = setup;
   const client = new Client(
     { name: "test", version: "0.0.0" },
     {
-      capabilities: { elicitation: { form: {} } },
+      capabilities: {
+        elicitation: { form: {} },
+        ...(extensions === undefined ? {} : { extensions }),
+      },
       ...(pin === undefined ? {} : { versionNegotiation: { mode: { pin } } }),
     },
   );
   const seen: unknown[] = [];
   const left = [...script];
   client.setRequestHandler("elicitation/create", (request) => {
-    const { _meta: _progress, ...params } = request.params as Record<string, unknown>;
-    seen.push(params);
+    const { _meta: meta, ...params } = request.params as Record<string, unknown>;
+    const openai = (meta as Readonly<Record<string, unknown>> | undefined)?.["openai/elicitation"];
+    seen.push(
+      openai === undefined ? params : { ...params, _meta: { "openai/elicitation": openai } },
+    );
     return left.shift() as never;
   });
   open.push(client);
@@ -2787,14 +2819,16 @@ function formClient(script: readonly unknown[], pin?: string): { client: Client;
  * `formClient` on the stdio `Server`, which answers 2025 requests through the SDK's shim.
  *
  * @param script - Replies in order.
+ * @param setup - The extensions the client declares.
  * @returns {Promise<{ client: Client; seen: unknown[] }>} Connected client and its record.
  */
 async function askingMcpClient(
   script: readonly unknown[],
+  setup: FormSetup = {},
 ): Promise<{ client: Client; seen: unknown[] }> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createMcpServer({ name: "demo", version: "0.0.0" }, [asker]);
-  const asking = formClient(script);
+  const asking = formClient(script, setup);
   open.push(server);
   await Promise.all([server.connect(serverTransport), asking.client.connect(clientTransport)]);
   return asking;
@@ -2804,12 +2838,12 @@ async function askingMcpClient(
  * `formClient` on h3-mcp over Streamable HTTP.
  *
  * @param script - Replies in order.
- * @param pin - Protocol revision to insist on.
+ * @param setup - The revision to insist on and the extensions to declare.
  * @returns {Promise<{ client: Client; seen: unknown[] }>} Connected client and its record.
  */
 async function askingH3Client(
   script: readonly unknown[],
-  pin?: string,
+  setup: FormSetup = {},
 ): Promise<{ client: Client; seen: unknown[] }> {
   const app = new H3().all(
     "/mcp",
@@ -2822,7 +2856,29 @@ async function askingH3Client(
   const transport = new StreamableHTTPClientTransport(new URL("http://localhost/mcp"), {
     fetch: async (input, init) => app.fetch(new Request(input, init)),
   });
-  const asking = formClient(script, pin);
+  const asking = formClient(script, setup);
+  await asking.client.connect(transport);
+  return asking;
+}
+
+/**
+ * `formClient` on `createMcpServer` over Streamable HTTP.
+ *
+ * @param script - Replies in order.
+ * @param setup - The revision to insist on and the extensions to declare.
+ * @returns {Promise<{ client: Client; seen: unknown[] }>} Connected client and its record.
+ */
+async function askingHttpClient(
+  script: readonly unknown[],
+  setup: FormSetup,
+): Promise<{ client: Client; seen: unknown[] }> {
+  const handler = createMcpHandler(() =>
+    createMcpServer({ name: "demo", version: "0.0.0" }, [asker]),
+  );
+  const transport = new StreamableHTTPClientTransport(new URL("http://localhost/mcp"), {
+    fetch: async (input, init) => await handler.fetch(new Request(input, init)),
+  });
+  const asking = formClient(script, setup);
   await asking.client.connect(transport);
   return asking;
 }
@@ -2880,7 +2936,7 @@ async function roundTrip(
     "demo_ask",
     {},
     {},
-    questionRound(responses, state),
+    questionRound({ responses, state }, "mcp"),
   );
 }
 
@@ -3035,6 +3091,39 @@ describe("questions", () => {
     expect(firstText(last)).toBe("red x3 tags=b loud=true note=-");
   });
 
+  it("puts the form in _meta for ChatGPT and replays its answers like any other", async () => {
+    const pass = async (retry: RoundRetry) =>
+      await callAsking(
+        { name: "demo" },
+        [asker],
+        "demo_ask",
+        {},
+        {},
+        questionRound(retry, "openai"),
+      );
+    const first = await pass({});
+    const second = await pass({ responses: { "ask-0": replies[0] }, state: stateOf(first) });
+    const last = await pass({ responses: { "ask-1": replies[1] }, state: stateOf(second) });
+
+    expect(inputRequestsOf(first)).toEqual({
+      "ask-0": { method: "elicitation/create", params: chatgptColorWire },
+    });
+    expect(Object.keys(inputRequestsOf(second))).toEqual(["ask-1"]);
+    expect(firstText(last)).toBe("red x3 tags=b loud=true note=-");
+  });
+
+  it("asks in ChatGPT's form only when the client declares it next to MCP's", () => {
+    expect(askForm({ elicitation: { form: {} }, extensions: CHATGPT })).toBe("openai");
+    expect(askForm({ elicitation: {}, extensions: CHATGPT })).toBe("mcp");
+    expect(askForm({ extensions: CHATGPT })).toBe("mcp");
+    expect(askForm({ elicitation: { form: {} } })).toBe("mcp");
+    expect(askForm({ elicitation: { form: {} }, extensions: { "openai/elicitation": {} } })).toBe(
+      "mcp",
+    );
+    expect(askForm({ elicitation: { form: {} }, extensions: "openai/elicitation" })).toBe("mcp");
+    expect(askForm(undefined)).toBe("mcp");
+  });
+
   it("asks again past a replayed answer that doesn't fit, as from a tampered state", async () => {
     const first = await roundTrip(undefined, undefined);
     const second = await roundTrip({ "ask-0": replies[0] }, stateOf(first));
@@ -3068,7 +3157,7 @@ describe("questions", () => {
         "demo_apply",
         {},
         {},
-        questionRound(responses, state),
+        questionRound({ responses, state }, "mcp"),
       );
 
     const asked = await call();
@@ -3121,12 +3210,31 @@ describe("questions", () => {
   });
 
   it("asks over h3-mcp on the 2026 revision, the call starting over for each answer", async () => {
-    const { client, seen } = await askingH3Client(replies, "2026-07-28");
+    const { client, seen } = await askingH3Client(replies, { pin: "2026-07-28" });
     passes = 0;
     const result = await client.callTool({ name: "demo_ask", arguments: {} });
 
     expect(firstText(result)).toBe("red x3 tags=b loud=true note=-");
     expect(passes).toBe(3);
+    expect(seen[0]).toEqual(colorWire);
+  });
+
+  it("sends ChatGPT its own form on a 2026 request, over h3-mcp and createMcpServer", async () => {
+    const chatgpt = { pin: "2026-07-28", extensions: CHATGPT };
+    for (const connect of [askingH3Client, askingHttpClient]) {
+      const { client, seen } = await connect(replies, chatgpt);
+      const result = await client.callTool({ name: "demo_ask", arguments: {} });
+
+      expect(firstText(result)).toBe("red x3 tags=b loud=true note=-");
+      expect(seen[0]).toEqual(chatgptColorWire);
+    }
+  });
+
+  it("keeps MCP's form for ChatGPT on a 2025 connection", async () => {
+    const { client, seen } = await askingMcpClient(replies, { extensions: CHATGPT });
+    const result = await client.callTool({ name: "demo_ask", arguments: {} });
+
+    expect(firstText(result)).toBe("red x3 tags=b loud=true note=-");
     expect(seen[0]).toEqual(colorWire);
   });
 

@@ -10,6 +10,7 @@ import {
 
 import { indexTools, type ToolDefinition } from "./index.ts";
 import {
+  askForm,
   callAsking,
   canAsk,
   copyIcons,
@@ -102,11 +103,13 @@ export function createMcpServer(
           });
       };
       const envelope = ctx.mcpReq.envelope as Readonly<Record<string, unknown>> | undefined;
-      const capabilities =
-        envelope?.["io.modelcontextprotocol/clientCapabilities"] ?? server.getClientCapabilities();
-      const round = canAsk(capabilities)
-        ? questionRound(ctx.mcpReq.inputResponses, stateOf(ctx.mcpReq.requestState()))
-        : undefined;
+      const modern = envelope?.["io.modelcontextprotocol/clientCapabilities"];
+      const capabilities = modern ?? server.getClientCapabilities();
+      const retry = {
+        responses: ctx.mcpReq.inputResponses,
+        state: stateOf(ctx.mcpReq.requestState()),
+      };
+      const round = canAsk(capabilities) ? questionRound(retry, askForm(modern)) : undefined;
       const context = {
         signal: ctx.mcpReq.signal,
         ...mcpHost({ request: ctx.http?.req, meta }),

@@ -190,6 +190,17 @@ function answer(tool: ToolDefinition, result: ToolResult): CallToolResult {
   );
 }
 
+/** The form a question goes out as: MCP's own, or ChatGPT's, whose fields ride in `_meta`. */
+export type AskForm = "mcp" | "openai";
+
+/** What a retry echoes back: the answer to the question that was out, and the answers before it. */
+export interface RoundRetry {
+  /** The retry's `inputResponses`, absent on the first pass. */
+  readonly responses?: Readonly<Record<string, unknown>>;
+  /** The retry's `requestState`, absent on the first pass. */
+  readonly state?: string;
+}
+
 /** One pass of a call over MCP: the `ask` for `execute`, and the question it stopped on, if any. */
 export interface QuestionRound {
   readonly ask: ToolAsk;
@@ -211,15 +222,13 @@ export interface QuestionRound {
  *
  * A question without its answer never settles, so no `catch` around it lets the call run on.
  *
- * @param responses - The retry's `inputResponses`, absent on the first pass.
- * @param state - The retry's `requestState`, absent on the first pass.
+ * @param retry - What the client echoed back, empty on the first pass.
+ * @param form - The form each question goes out as, from {@link askForm}.
  * @returns {QuestionRound} The `ask`, the question to send and the moment the call stopped.
  */
-export function questionRound(
-  responses: Readonly<Record<string, unknown>> | undefined,
-  state: string | undefined,
-): QuestionRound {
-  const read = readState(state);
+export function questionRound(retry: RoundRetry, form: AskForm): QuestionRound {
+  const { responses } = retry;
+  const read = readState(retry.state);
   const answers = [...read.answers];
   const { asking } = read;
   const { promise: stopped, resolve: stop } = Promise.withResolvers<void>();
@@ -236,7 +245,10 @@ export function questionRound(
       answers[index] = { q: print, a: answer };
       return answer;
     }
-    pending = inputRequired(index, question, { answers: answers.slice(0, index), asking: print });
+    pending = inputRequired(
+      { index, question, form },
+      { answers: answers.slice(0, index), asking: print },
+    );
     stop();
     return await hold();
   };
@@ -337,33 +349,56 @@ function quietOnQuestion(
   };
 }
 
+/** One entry of `inputRequests`. */
+type InputRequest = NonNullable<InputRequiredResult["inputRequests"]>[string];
+
+/** The question a call stopped on: its place, its form and who reads it. */
+interface Asking {
+  readonly index: number;
+  readonly question: HostQuestion;
+  readonly form: AskForm;
+}
+
 /**
  * The `input_required` result for one question.
  *
- * @param index - Its place among the call's questions.
- * @param question - The question, its message cleaned.
+ * @param asking - The question and its place among the call's questions.
  * @param state - Every answer before it, and this question's fingerprint.
  * @returns {InputRequiredResult} What the client gets instead of a result.
  */
-function inputRequired(
-  index: number,
-  question: HostQuestion,
-  state: RoundState,
-): InputRequiredResult {
-  const { message, requested } = question;
+function inputRequired(asking: Asking, state: RoundState): InputRequiredResult {
+  const { index, question, form } = asking;
   return {
     resultType: "input_required",
-    inputRequests: {
-      [`ask-${index}`]: {
-        method: "elicitation/create",
-        params: {
-          mode: "form",
-          message,
-          requestedSchema: requested as ElicitRequestFormParams["requestedSchema"],
-        },
-      },
-    },
+    inputRequests: { [`ask-${index}`]: elicitRequest(question, form) },
     requestState: JSON.stringify(state),
+  };
+}
+
+/**
+ * One question as `elicitation/create`, ChatGPT's fields in `_meta` and its core form empty.
+ *
+ * @param question - The question, its message cleaned.
+ * @param form - Which client reads it.
+ * @returns {InputRequest} The embedded request.
+ */
+function elicitRequest(question: HostQuestion, form: AskForm): InputRequest {
+  const { message } = question;
+  const requested = question.requested as ElicitRequestFormParams["requestedSchema"];
+  if (form === "mcp") {
+    return {
+      method: "elicitation/create",
+      params: { mode: "form", message, requestedSchema: requested },
+    };
+  }
+  return {
+    method: "elicitation/create",
+    params: {
+      mode: "form",
+      message,
+      requestedSchema: { type: "object", properties: {} },
+      _meta: { "openai/elicitation": { requestedSchema: requested } },
+    },
   };
 }
 
@@ -408,6 +443,35 @@ export function canAsk(capabilities: unknown): boolean {
   if (typeof elicitation !== "object" || elicitation === null) return false;
   const modes = elicitation as { readonly form?: unknown; readonly url?: unknown };
   return modes.form !== undefined || modes.url === undefined;
+}
+
+/**
+ * Which form a 2026 client reads. A 2025 call passes nothing, since its shim sends plain forms.
+ *
+ * @param capabilities - The client capabilities the request carries.
+ * @returns {AskForm} `openai` with `elicitation.form` and `extensions["openai/elicitation"].form`.
+ */
+export function askForm(capabilities: unknown): AskForm {
+  const { elicitation, extensions } = (capabilities ?? {}) as {
+    readonly elicitation?: unknown;
+    readonly extensions?: unknown;
+  };
+  const openai = fieldOf(extensions, "openai/elicitation");
+  const both = fieldOf(elicitation, "form") !== undefined && fieldOf(openai, "form") !== undefined;
+  return both ? "openai" : "mcp";
+}
+
+/**
+ * One key of a value that may not be an object at all.
+ *
+ * @param value - What the client sent.
+ * @param key - The key to read.
+ * @returns {unknown} Its value, or `undefined` when there's no object to read it from.
+ */
+function fieldOf(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null
+    ? (value as Readonly<Record<string, unknown>>)[key]
+    : undefined;
 }
 
 /** One `notifications/progress` without its token. */
