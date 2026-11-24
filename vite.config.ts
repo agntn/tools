@@ -31,6 +31,8 @@ export default defineConfig({
                 "PartialResult",
               ],
             },
+            /* The discovery hook hands over a card to fill in, so this one is written to. */
+            { from: "file", name: ["ToolkitServerCard"] },
             {
               from: "package",
               name: ["AgentToolResult", "ExtensionAPI", "Theme", "ToolRenderResultOptions"],

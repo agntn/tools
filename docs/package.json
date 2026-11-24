@@ -28,7 +28,8 @@
     "@nuxt/ui": "catalog:dev",
     "shiki": "catalog:dev",
     "typescript": "catalog:nuxt",
-    "wrangler": "catalog:dev"
+    "wrangler": "catalog:dev",
+    "zod": "catalog:dev"
   },
   "packageManager": "pnpm@12.16.1"
 }

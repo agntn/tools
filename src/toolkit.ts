@@ -4,8 +4,8 @@
 
 import { z } from "zod";
 
-import { type ToolCallContext, type ToolDefinition } from "./index.ts";
-import { callTool, listTools, mcpHost, progressSteps } from "./mcp-answers.ts";
+import { type Icon, type ToolCallContext, type ToolDefinition } from "./index.ts";
+import { callTool, copyIcons, listTools, mcpHost, progressSteps } from "./mcp-answers.ts";
 import { hostAsk } from "./questions.ts";
 
 /** What SDK v1 keeps of the HTTP request. */
@@ -116,6 +116,75 @@ export function toToolkitTools(
         ...formAsk(extra, options.elicitation),
       }),
   }));
+}
+
+/** The server as the card shows it. An `McpServerInfo` fits, and so does a bare `{ name }`. */
+export interface ToolkitServerInfo {
+  readonly name: string;
+  readonly version?: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly icons?: readonly Icon[];
+  readonly websiteUrl?: string;
+}
+
+/** The card nuxt-agent-discovery serves at `/.well-known/mcp/server-card.json`, filled in place. */
+export interface ToolkitServerCard {
+  [key: string]: unknown;
+}
+
+/** What the card lists per tool. */
+interface CardTool {
+  readonly name: string;
+  readonly description: string;
+}
+
+/**
+ * Hook for `agent-discovery:mcp-server-card`: our `serverInfo`, then our tools after the rest.
+ *
+ * @param info - Server info, given as to `defineMcpHandler`.
+ * @param tools - Tools the `/mcp` route serves.
+ * @returns {(event: unknown, card: ToolkitServerCard) => void} The hook, which ignores the event.
+ * @throws {ToolDefinitionError} When two tools share a name.
+ */
+export function serverCardHook(
+  info: ToolkitServerInfo,
+  tools: readonly ToolDefinition[],
+): (event: unknown, card: ToolkitServerCard) => void {
+  const listed: readonly CardTool[] = listTools(tools).map(({ name, description = "" }) => ({
+    name,
+    description,
+  }));
+  const ours = new Set(listed.map(({ name }) => name));
+  const serverInfo = {
+    ...info,
+    ...(info.icons === undefined ? {} : { icons: copyIcons(info.icons) }),
+  };
+  const theirs = (entry: unknown): boolean => {
+    const { name } = plainObject(entry);
+    return typeof name !== "string" || !ours.has(name);
+  };
+  return (_event, card) => {
+    card.serverInfo = { ...plainObject(card.serverInfo), ...serverInfo };
+    card.tools = [
+      ...(Array.isArray(card.tools as unknown) ? (card.tools as readonly unknown[]) : []).filter(
+        theirs,
+      ),
+      ...listed.map((tool) => ({ ...tool })),
+    ];
+  };
+}
+
+/**
+ * The value itself when it is a plain object, else an empty one.
+ *
+ * @param value - Whatever the card holds there.
+ * @returns {Readonly<Record<string, unknown>>} Something safe to spread.
+ */
+function plainObject(value: unknown): Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : {};
 }
 
 /**
