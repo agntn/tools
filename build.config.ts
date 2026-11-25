@@ -11,6 +11,7 @@ export default defineBuildConfig({
       input: [
         "./src/index.ts",
         "./src/mcp.ts",
+        "./src/stdio.ts",
         "./src/h3.ts",
         "./src/http.ts",
         "./src/toolkit.ts",

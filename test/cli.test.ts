@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { Client } from "@modelcontextprotocol/client";
@@ -38,6 +38,14 @@ const fixture = fileURLToPath(new URL("fixtures/demo-cli.ts", import.meta.url));
 const plainFixture = fileURLToPath(new URL("fixtures/plain-cli.ts", import.meta.url));
 const hostFixture = fileURLToPath(new URL("fixtures/host-cli.ts", import.meta.url));
 const serverInfoFixture = fileURLToPath(new URL("fixtures/server-info-cli.ts", import.meta.url));
+const askFixture = fileURLToPath(new URL("fixtures/ask-cli.ts", import.meta.url));
+
+/* What a 2026 client puts in `_meta`, form elicitation declared. */
+const envelope = {
+  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+  "io.modelcontextprotocol/clientInfo": { name: "raw", version: "0" },
+  "io.modelcontextprotocol/clientCapabilities": { elicitation: { form: {} } },
+};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -66,6 +74,30 @@ async function run(argv: readonly string[], cli: CliOptions = options) {
   const exitCode = process.exitCode;
   process.exitCode = undefined;
   return { stdout, stderr, exitCode };
+}
+
+/* Sends raw lines to a fixture's `mcp` and waits for the answer to `id`. */
+async function exchange(cli: string, lines: readonly object[], id: number): Promise<unknown> {
+  const child = spawn(process.execPath, [cli, "mcp"], { stdio: ["pipe", "pipe", "ignore"] });
+  const answer = new Promise<unknown>((resolve, reject) => {
+    let buffer = "";
+    child.on("error", reject);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      buffer += chunk;
+      for (const line of buffer.split("\n").slice(0, -1)) {
+        const message = JSON.parse(line) as { id?: unknown };
+        if (message.id === id) resolve(message);
+      }
+      buffer = buffer.slice(buffer.lastIndexOf("\n") + 1);
+    });
+  });
+  child.stdin.write(lines.map((line) => `${JSON.stringify(line)}\n`).join(""));
+  try {
+    return await answer;
+  } finally {
+    child.stdin.end();
+  }
 }
 
 /**
@@ -1937,6 +1969,29 @@ describe("CLI process", () => {
     } finally {
       await client.close();
     }
+  });
+
+  it("keeps a 2026 client on 2026 when a bare notification follows its discover", async () => {
+    const answer = await exchange(
+      askFixture,
+      [
+        { jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta: envelope } },
+        { jsonrpc: "2.0", method: "notifications/roots/list_changed", params: {} },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "demo_colour", arguments: {}, _meta: envelope },
+        },
+      ],
+      2,
+    );
+    expect(answer).toMatchObject({
+      result: {
+        resultType: "input_required",
+        inputRequests: { "ask-0": { method: "elicitation/create" } },
+      },
+    });
   });
 
   it("introduces the MCP server with the info mcp was given, not the help line", async () => {

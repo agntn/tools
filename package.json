@@ -28,6 +28,10 @@
       "types": "./dist/h3.d.mts",
       "import": "./dist/h3.mjs"
     },
+    "./stdio": {
+      "types": "./dist/stdio.d.mts",
+      "import": "./dist/stdio.mjs"
+    },
     "./http": {
       "types": "./dist/http.d.mts",
       "import": "./dist/http.mjs"
