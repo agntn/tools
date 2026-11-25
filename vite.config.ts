@@ -35,9 +35,11 @@ export default defineConfig({
             { from: "file", name: ["ToolkitServerCard"] },
             {
               from: "package",
-              name: ["AgentToolResult", "ExtensionAPI", "Theme", "ToolRenderResultOptions"],
+              name: ["AgentToolResult", "ExtensionAPI", "ToolRenderResultOptions"],
               package: "@oh-my-pi/pi-coding-agent",
             },
+            /* OMP 19 declares the theme in its TUI package. */
+            { from: "package", name: ["Theme"], package: "@oh-my-pi/pi-tui" },
             {
               from: "package",
               name: ["ExtensionAPI", "ExtensionContext"],
