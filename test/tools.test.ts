@@ -1087,6 +1087,27 @@ describe("MCP adapter", () => {
     ]);
   });
 
+  it("hands Claude Code the instructions on 2025 and 2026 alike", async () => {
+    const instructions = "Reach for demo tools when a word needs echoing.";
+    const handler = createMcpHandler(() =>
+      createMcpServer({ name: "demo", version: "0.0.0", instructions }, [echo]),
+    );
+    for (const pin of [undefined, "2026-07-28"] as const) {
+      const client = new Client(
+        { name: "test", version: "0.0.0" },
+        pin === undefined ? {} : { versionNegotiation: { mode: { pin } } },
+      );
+      open.push(client);
+      const transport = new StreamableHTTPClientTransport(new URL("http://localhost/mcp"), {
+        fetch: async (input, init) => await handler.fetch(new Request(input, init)),
+      });
+      await client.connect(transport);
+
+      expect(client.getInstructions()).toBe(instructions);
+      expect(client.getServerVersion()).toEqual({ name: "demo", version: "0.0.0" });
+    }
+  });
+
   it("lists a tool's icons and leaves the key out for a tool without them", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createMcpServer({ name: "demo", version: "0.0.0" }, [echo, signal]);
@@ -1651,7 +1672,13 @@ describe("mcp-toolkit adapter", () => {
         { name: "demo_echo", description: "A stale copy." },
       ],
     };
-    const info = { name: "demo", version: "1.0.0", description: "Demo tools.", icons: [icon] };
+    const info = {
+      name: "demo",
+      version: "1.0.0",
+      description: "Demo tools.",
+      icons: [icon],
+      instructions: "Use demo tools for words.",
+    };
     serverCardHook(info, [echo, count])(undefined, card);
 
     expect(card).toEqual({

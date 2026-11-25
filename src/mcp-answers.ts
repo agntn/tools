@@ -40,6 +40,8 @@ export interface McpServerInfo {
   readonly icons?: readonly Icon[];
   /** Project home a client can link to. */
   readonly websiteUrl?: string;
+  /** When to reach for these tools. Claude Code's tool search reads it before any tool. */
+  readonly instructions?: string;
 }
 
 /** What a tool finds in `host` over MCP. The client wrote all of it, so none of it is proof. */
