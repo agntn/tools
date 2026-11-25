@@ -27,7 +27,7 @@ import {
   type CallToolResult as SdkV1Result,
 } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
-import type { z } from "zod";
+import { z } from "zod";
 
 import { toAiTool, toAiTools, type AiToolOutput } from "../src/ai.ts";
 import { causeLines, throwWithCauses } from "../src/causes.ts";
@@ -54,7 +54,14 @@ import {
 import { toH3Tools } from "../src/h3.ts";
 import { createHttpHandler } from "../src/http.ts";
 import { callTool, createMcpServer, listTools, type McpHost } from "../src/mcp.ts";
-import { askForm, callAsking, canAsk, questionRound, type RoundRetry } from "../src/mcp-answers.ts";
+import {
+  askForm,
+  callAsking,
+  canAsk,
+  fillsOpenaiForms,
+  questionRound,
+  type RoundRetry,
+} from "../src/mcp-answers.ts";
 import { hostAsk, requestedSchema, type HostQuestion } from "../src/questions.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
@@ -1492,6 +1499,12 @@ describe("h3-mcp adapter", () => {
   });
 });
 
+/** What a toolkit server passes `toToolkitTools`. */
+interface ToolkitReads {
+  readonly elicitation?: boolean;
+  readonly capabilities?: boolean;
+}
+
 /**
  * An `McpServer` that registers each entry the way the toolkit does.
  *
@@ -1499,14 +1512,18 @@ describe("h3-mcp adapter", () => {
  * Bare SDK v1 types the result tighter than the toolkit does, hence the cast.
  *
  * @param tools - Tools to serve.
- * @param elicitation - Whether to pass a `useMcpElicitation` reading the server, like the real one.
+ * @param reads - Whether to pass `useMcpElicitation` and the capabilities.
  * @returns {McpServer} Unconnected server.
  */
-function toolkitServer(tools: readonly ToolDefinition[], elicitation = false): McpServer {
+function toolkitServer(tools: readonly ToolDefinition[], reads: ToolkitReads = {}): McpServer {
   const server = new McpServer({ name: "demo", version: "0.0.0" });
-  const options = elicitation
-    ? { elicitation: () => ({ supports: () => canAsk(server.server.getClientCapabilities()) }) }
-    : {};
+  const capabilities = (): unknown => server.server.getClientCapabilities();
+  const options = {
+    ...(reads.elicitation === true
+      ? { elicitation: () => ({ supports: () => canAsk(capabilities()) }) }
+      : {}),
+    ...(reads.capabilities === true ? { capabilities } : {}),
+  };
   for (const tool of toToolkitTools({ name: "demo" }, tools, options)) {
     server.registerTool(
       tool.name,
@@ -2761,6 +2778,8 @@ const replies = [
 interface FormSetup {
   /** Protocol revision to insist on, else the SDK's 2025 default. */
   readonly pin?: string;
+  /** Whether the client declares MCP's `elicitation`, true by default. */
+  readonly elicitation?: boolean;
   readonly extensions?: Readonly<
     Record<string, Readonly<Record<string, Readonly<Record<string, never>>>>>
   >;
@@ -2768,6 +2787,21 @@ interface FormSetup {
 
 /** What ChatGPT declares next to `elicitation` to get its own forms. */
 const CHATGPT = { "openai/elicitation": { form: {} } };
+
+/** ChatGPT's form method on 2025. */
+const OPENAI_ELICIT = "openai/elicitation/create";
+
+/* A `seen` entry for ChatGPT's 2025 method. */
+function openaiSeen(params: unknown) {
+  return { method: OPENAI_ELICIT, params };
+}
+
+/** `detailsForm` on the wire. */
+const detailsWire = {
+  mode: "form",
+  message: "Details",
+  requestedSchema: requestedSchema({ message: "", schema: detailsForm }),
+};
 
 /** `colorWire` as ChatGPT gets it: an empty core form, the fields in `_meta`. */
 const chatgptColorWire = {
@@ -2790,12 +2824,12 @@ function formClient(
   script: readonly unknown[],
   setup: FormSetup = {},
 ): { client: Client; seen: unknown[] } {
-  const { pin, extensions } = setup;
+  const { pin, elicitation = true, extensions } = setup;
   const client = new Client(
     { name: "test", version: "0.0.0" },
     {
       capabilities: {
-        elicitation: { form: {} },
+        ...(elicitation ? { elicitation: { form: {} } } : {}),
         ...(extensions === undefined ? {} : { extensions }),
       },
       ...(pin === undefined ? {} : { versionNegotiation: { mode: { pin } } }),
@@ -2803,12 +2837,20 @@ function formClient(
   );
   const seen: unknown[] = [];
   const left = [...script];
-  client.setRequestHandler("elicitation/create", (request) => {
-    const { _meta: meta, ...params } = request.params as Record<string, unknown>;
-    const openai = (meta as Readonly<Record<string, unknown>> | undefined)?.["openai/elicitation"];
-    seen.push(
-      openai === undefined ? params : { ...params, _meta: { "openai/elicitation": openai } },
-    );
+  if (elicitation) {
+    client.setRequestHandler("elicitation/create", (request) => {
+      const { _meta: meta, ...params } = request.params as Record<string, unknown>;
+      const openai = (meta as Readonly<Record<string, unknown>> | undefined)?.[
+        "openai/elicitation"
+      ];
+      seen.push(
+        openai === undefined ? params : { ...params, _meta: { "openai/elicitation": openai } },
+      );
+      return left.shift() as never;
+    });
+  }
+  client.setRequestHandler(OPENAI_ELICIT, { params: z.unknown() }, (params) => {
+    seen.push(openaiSeen(params));
     return left.shift() as never;
   });
   open.push(client);
@@ -2892,25 +2934,35 @@ async function askingHttpClient(
  */
 async function askingToolkitClient(
   script: readonly unknown[],
-  setup: Readonly<{ elicitation?: boolean; capabilities?: Readonly<Record<string, unknown>> }> = {},
+  setup: Readonly<{ reads?: ToolkitReads; capabilities?: Readonly<Record<string, unknown>> }> = {},
 ): Promise<AskingToolkit> {
-  const { elicitation = true, capabilities = { elicitation: { form: {} } } } = setup;
+  const { reads = { elicitation: true }, capabilities = { elicitation: { form: {} } } } = setup;
   const client = new SdkV1Client({ name: "test", version: "0.0.0" }, { capabilities });
-  const server = toolkitServer([asker], elicitation);
+  const server = toolkitServer([asker], reads);
   const seen: unknown[] = [];
   const cancelled: string[] = [];
   const left = [...script];
+  const answer = async (message: string, signal: AbortSignal): Promise<never> => {
+    const reply = left.shift();
+    if (reply !== undefined) return reply as never;
+    return await new Promise<never>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        cancelled.push(message);
+        reject(new Error("cancelled"));
+      });
+    });
+  };
   if (capabilities.elicitation !== undefined) {
     client.setRequestHandler(ElicitRequestSchema, async (request, extra) => {
       seen.push(request.params);
-      const reply = left.shift();
-      if (reply !== undefined) return reply as never;
-      return await new Promise<never>((_resolve, reject) => {
-        extra.signal.addEventListener("abort", () => {
-          cancelled.push(request.params.message);
-          reject(new Error("cancelled"));
-        });
-      });
+      return await answer(request.params.message, extra.signal);
+    });
+  }
+  if (capabilities.extensions !== undefined) {
+    const openai = z.object({ method: z.literal(OPENAI_ELICIT), params: z.looseObject({}) });
+    client.setRequestHandler(openai, async (request, extra) => {
+      seen.push(openaiSeen(request.params));
+      return await answer(String(request.params.message), extra.signal);
     });
   }
   await toolkitClient(server, client);
@@ -3124,6 +3176,15 @@ describe("questions", () => {
     expect(askForm(undefined)).toBe("mcp");
   });
 
+  it("sends ChatGPT's 2025 method only to a client that declares its forms", () => {
+    expect(fillsOpenaiForms({ extensions: CHATGPT })).toBe(true);
+    expect(fillsOpenaiForms({ elicitation: { form: {} }, extensions: CHATGPT })).toBe(true);
+    expect(fillsOpenaiForms({ elicitation: { form: {} } })).toBe(false);
+    expect(fillsOpenaiForms({ extensions: { "openai/elicitation": {} } })).toBe(false);
+    expect(fillsOpenaiForms({ extensions: "openai/elicitation" })).toBe(false);
+    expect(fillsOpenaiForms(undefined)).toBe(false);
+  });
+
   it("asks again past a replayed answer that doesn't fit, as from a tampered state", async () => {
     const first = await roundTrip(undefined, undefined);
     const second = await roundTrip({ "ask-0": replies[0] }, stateOf(first));
@@ -3230,12 +3291,103 @@ describe("questions", () => {
     }
   });
 
-  it("keeps MCP's form for ChatGPT on a 2025 connection", async () => {
+  it("asks ChatGPT on a 2025 connection with openai/elicitation/create, the call running once", async () => {
     const { client, seen } = await askingMcpClient(replies, { extensions: CHATGPT });
+    passes = 0;
     const result = await client.callTool({ name: "demo_ask", arguments: {} });
 
     expect(firstText(result)).toBe("red x3 tags=b loud=true note=-");
-    expect(seen[0]).toEqual(colorWire);
+    expect(passes).toBe(1);
+    expect(seen).toEqual([openaiSeen(colorWire), openaiSeen(detailsWire)]);
+  });
+
+  it("asks a 2025 client that declares ChatGPT's forms and not MCP's", async () => {
+    const { client, seen } = await askingMcpClient(replies, {
+      elicitation: false,
+      extensions: CHATGPT,
+    });
+    const result = await client.callTool({ name: "demo_ask", arguments: {} });
+
+    expect(firstText(result)).toBe("red x3 tags=b loud=true note=-");
+    expect(seen[0]).toEqual(openaiSeen(colorWire));
+  });
+
+  it("takes a decline from ChatGPT on a 2025 connection as the answer", async () => {
+    const { client } = await askingMcpClient([{ action: "decline" }], { extensions: CHATGPT });
+    expect(firstText(await client.callTool({ name: "demo_ask", arguments: {} }))).toBe(
+      "color decline",
+    );
+  });
+
+  it("fails the call when ChatGPT's 2025 reply doesn't fit the form", async () => {
+    const { client } = await askingMcpClient([{ action: "accept", content: { color: "blue" } }], {
+      extensions: CHATGPT,
+    });
+    const result = await client.callTool({ name: "demo_ask", arguments: {} });
+
+    expect(result.isError).toBe(true);
+    expect(firstText(result)).toBe("demo_ask failed: The answer doesn't fit the question");
+  });
+
+  it("gives ChatGPT's 2025 form the shim's ten minutes, not the SDK's one", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const client = new Client(
+        { name: "test", version: "0.0.0" },
+        { capabilities: { elicitation: { form: {} }, extensions: CHATGPT } },
+      );
+      const shown = Promise.withResolvers<void>();
+      const filled = Promise.withResolvers<unknown>();
+      const left = [filled.promise, replies[1]];
+      client.setRequestHandler(OPENAI_ELICIT, { params: z.unknown() }, async () => {
+        shown.resolve();
+        return (await left.shift()) as never;
+      });
+      const server = createMcpServer({ name: "demo", version: "0.0.0" }, [asker]);
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      open.push(client, server);
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      const call = client.callTool({ name: "demo_ask", arguments: {} }, { timeout: 3_600_000 });
+      await shown.promise;
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+      filled.resolve(replies[0]);
+
+      expect(firstText(await call)).toBe("red x3 tags=b loud=true note=-");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("withdraws ChatGPT's 2025 question when the client cancels the call", async () => {
+    const client = new Client(
+      { name: "test", version: "0.0.0" },
+      { capabilities: { elicitation: { form: {} }, extensions: CHATGPT } },
+    );
+    const asked: string[] = [];
+    const cancelled: string[] = [];
+    client.setRequestHandler(
+      OPENAI_ELICIT,
+      { params: z.object({ message: z.string() }) },
+      async (params, ctx) =>
+        await new Promise<never>((_resolve, reject) => {
+          asked.push(params.message);
+          ctx.mcpReq.signal.addEventListener("abort", () => {
+            cancelled.push(params.message);
+            reject(new Error("cancelled"));
+          });
+        }),
+    );
+    const server = createMcpServer({ name: "demo", version: "0.0.0" }, [asker]);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    open.push(client, server);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const stop = new AbortController();
+    const call = client.callTool({ name: "demo_ask", arguments: {} }, { signal: stop.signal });
+    await expect.poll(() => asked).toEqual([colorWire.message]);
+    stop.abort(new Error("changed my mind"));
+
+    await expect(call).rejects.toThrow("changed my mind");
+    await expect.poll(() => cancelled).toEqual([colorWire.message]);
   });
 
   it("gives no ask over h3-mcp on a 2025 request, which has no way to carry one", async () => {
@@ -3287,7 +3439,7 @@ describe("questions", () => {
           });
         }),
     );
-    const server = toolkitServer([asker], true);
+    const server = toolkitServer([asker], { elicitation: true });
     const [clientTransport, serverTransport] = SdkV1Transport.createLinkedPair();
     open.push(client, server);
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -3309,10 +3461,37 @@ describe("questions", () => {
   });
 
   it("gives no ask over the toolkit without useMcpElicitation", async () => {
-    const { client } = await askingToolkitClient(replies, { elicitation: false });
+    const { client } = await askingToolkitClient(replies, { reads: {} });
     expect(firstText(await client.callTool({ name: "demo_ask", arguments: {} }))).toBe(
       "nobody to ask",
     );
+  });
+
+  it("asks ChatGPT over the toolkit with openai/elicitation/create once it reads capabilities", async () => {
+    const chatgpt = { elicitation: { form: {} }, extensions: CHATGPT };
+    for (const reads of [{ elicitation: true, capabilities: true }, { capabilities: true }]) {
+      const { client, seen } = await askingToolkitClient(replies, { reads, capabilities: chatgpt });
+      const result = await client.callTool({ name: "demo_ask", arguments: {} });
+
+      expect(firstText(result)).toBe("red x3 tags=b loud=true note=-");
+      expect(seen).toEqual([openaiSeen(colorWire), openaiSeen(detailsWire)]);
+    }
+  });
+
+  it("keeps MCP's method over the toolkit for a client without ChatGPT's forms", async () => {
+    const { client, seen } = await askingToolkitClient(replies, {
+      reads: { elicitation: true, capabilities: true },
+    });
+    await client.callTool({ name: "demo_ask", arguments: {} });
+    expect(seen[0]).toEqual(colorWire);
+  });
+
+  it("keeps MCP's method over the toolkit when it can't read the capabilities", async () => {
+    const { client, seen } = await askingToolkitClient(replies, {
+      capabilities: { elicitation: { form: {} }, extensions: CHATGPT },
+    });
+    await client.callTool({ name: "demo_ask", arguments: {} });
+    expect(seen[0]).toEqual(colorWire);
   });
 });
 

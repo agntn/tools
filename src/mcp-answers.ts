@@ -452,13 +452,38 @@ export function canAsk(capabilities: unknown): boolean {
  * @returns {AskForm} `openai` with `elicitation.form` and `extensions["openai/elicitation"].form`.
  */
 export function askForm(capabilities: unknown): AskForm {
-  const { elicitation, extensions } = (capabilities ?? {}) as {
-    readonly elicitation?: unknown;
-    readonly extensions?: unknown;
-  };
-  const openai = fieldOf(extensions, "openai/elicitation");
-  const both = fieldOf(elicitation, "form") !== undefined && fieldOf(openai, "form") !== undefined;
+  const { elicitation } = (capabilities ?? {}) as { readonly elicitation?: unknown };
+  const both = fieldOf(elicitation, "form") !== undefined && fillsOpenaiForms(capabilities);
   return both ? "openai" : "mcp";
+}
+
+/** ChatGPT's form method on 2025 connections. */
+export const OPENAI_ELICIT = "openai/elicitation/create";
+
+/**
+ * Whether a client declares ChatGPT's forms.
+ *
+ * @param capabilities - What the client declared.
+ * @returns {boolean} Whether `extensions["openai/elicitation"].form` is there.
+ */
+export function fillsOpenaiForms(capabilities: unknown): boolean {
+  const { extensions } = (capabilities ?? {}) as { readonly extensions?: unknown };
+  return fieldOf(fieldOf(extensions, "openai/elicitation"), "form") !== undefined;
+}
+
+/**
+ * One question under ChatGPT's 2025 method.
+ *
+ * @param question - The question, its message cleaned.
+ * @returns {{ method: typeof OPENAI_ELICIT; params: ElicitRequestFormParams }} The request to send.
+ */
+export function openaiElicitRequest(question: HostQuestion): {
+  method: typeof OPENAI_ELICIT;
+  params: ElicitRequestFormParams;
+} {
+  const { message } = question;
+  const requestedSchema = question.requested as ElicitRequestFormParams["requestedSchema"];
+  return { method: OPENAI_ELICIT, params: { mode: "form", message, requestedSchema } };
 }
 
 /**

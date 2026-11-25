@@ -6,6 +6,7 @@ import {
   Server,
   type CallToolResult,
   type InputRequiredResult,
+  type StandardSchemaV1,
 } from "@modelcontextprotocol/server";
 
 import { indexTools, type ToolDefinition } from "./index.ts";
@@ -15,13 +16,16 @@ import {
   canAsk,
   copyIcons,
   errorResult,
+  fillsOpenaiForms,
   listTools,
   mcpHost,
+  openaiElicitRequest,
   progressSteps,
   questionRound,
   type McpServerInfo,
   type ProgressParams,
 } from "./mcp-answers.ts";
+import { hostAsk } from "./questions.ts";
 
 /** The line under the reason when a dropped answer may hide a write. */
 const DROPPED = "The call's answer was dropped, and it may have run. Check before retrying.";
@@ -59,6 +63,7 @@ export {
  *
  * A client that declares `elicitation` gets `ask`, through `input_required` on both revisions.
  * A 2026 request carries its capabilities itself, a 2025 one declared them at `initialize`.
+ * ChatGPT on 2025 gets `openai/elicitation/create`, the only method it hears.
  *
  * `host` is an {@link McpHost}: the HTTP request on an HTTP transport, the call's `_meta` on any.
  *
@@ -105,15 +110,28 @@ export function createMcpServer(
       const envelope = ctx.mcpReq.envelope as Readonly<Record<string, unknown>> | undefined;
       const modern = envelope?.["io.modelcontextprotocol/clientCapabilities"];
       const capabilities = modern ?? server.getClientCapabilities();
+      const { signal } = ctx.mcpReq;
+      const way = askWay(modern, capabilities);
       const retry = {
         responses: ctx.mcpReq.inputResponses,
         state: stateOf(ctx.mcpReq.requestState()),
       };
-      const round = canAsk(capabilities) ? questionRound(retry, askForm(modern)) : undefined;
+      const round = way === "round" ? questionRound(retry, askForm(modern)) : undefined;
       const context = {
-        signal: ctx.mcpReq.signal,
+        signal,
         ...mcpHost({ request: ctx.http?.req, meta }),
         ...(progressToken === undefined ? {} : { progress: progressSteps(notify) }),
+        ...(way === "openai"
+          ? {
+              ask: hostAsk(
+                async (question) =>
+                  await ctx.mcpReq.send(openaiElicitRequest(question), ANY_RESULT, {
+                    signal,
+                    timeout: ANSWER_TIMEOUT,
+                  }),
+              ),
+            }
+          : {}),
       };
       const { name, arguments: args } = request.params;
       return await callAsking(info, tools, name, args, context, round);
@@ -168,6 +186,26 @@ async function reasonOf(refuse: McpServerOptions["refuse"]): Promise<string | un
 function mayHaveRun(tool: ToolDefinition | undefined, answer: object): boolean {
   if (tool === undefined || "resultType" in answer) return false;
   return !(tool.idempotent ?? tool.effect === "read");
+}
+
+/** Ten minutes per form, like the SDK's 2025 shim. */
+const ANSWER_TIMEOUT = 600_000;
+
+/** Any reply passes; `hostAsk` checks it right after. */
+const ANY_RESULT: StandardSchemaV1 = {
+  "~standard": { version: 1, vendor: "@agntn/tools", validate: (value) => ({ value }) },
+};
+
+/**
+ * How a call asks: ChatGPT's 2025 method, a round, or not at all.
+ *
+ * @param modern - Capabilities a 2026 request carries.
+ * @param capabilities - Those, or what 2025 declared at `initialize`.
+ * @returns {"openai" | "round" | undefined} The way, if any.
+ */
+function askWay(modern: unknown, capabilities: unknown): "openai" | "round" | undefined {
+  if (modern === undefined && fillsOpenaiForms(capabilities)) return "openai";
+  return canAsk(capabilities) ? "round" : undefined;
 }
 
 /**
