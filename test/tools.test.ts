@@ -3452,6 +3452,34 @@ describe("questions", () => {
     await expect.poll(() => cancelled).toEqual([colorWire.message]);
   });
 
+  it("gives a toolkit form ten minutes, not SDK v1's one", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const client = new SdkV1Client(
+        { name: "test", version: "0.0.0" },
+        { capabilities: { elicitation: { form: {} } } },
+      );
+      const shown = Promise.withResolvers<void>();
+      const filled = Promise.withResolvers<unknown>();
+      const left = [filled.promise, replies[1]];
+      client.setRequestHandler(ElicitRequestSchema, async () => {
+        shown.resolve();
+        return (await left.shift()) as never;
+      });
+      await toolkitClient(toolkitServer([asker], { elicitation: true }), client);
+      const call = client.callTool({ name: "demo_ask", arguments: {} }, undefined, {
+        timeout: 3_600_000,
+      });
+      await shown.promise;
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+      filled.resolve(replies[0]);
+
+      expect(firstText(await call)).toBe("red x3 tags=b loud=true note=-");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("gives no ask over the toolkit to a client without elicitation", async () => {
     const { client, seen } = await askingToolkitClient(replies, { capabilities: {} });
     expect(firstText(await client.callTool({ name: "demo_ask", arguments: {} }))).toBe(

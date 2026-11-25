@@ -11,6 +11,7 @@ import {
 
 import { indexTools, type ToolDefinition } from "./index.ts";
 import {
+  ANSWER_TIMEOUT,
   askForm,
   callAsking,
   canAsk,
@@ -187,9 +188,6 @@ function mayHaveRun(tool: ToolDefinition | undefined, answer: object): boolean {
   if (tool === undefined || "resultType" in answer) return false;
   return !(tool.idempotent ?? tool.effect === "read");
 }
-
-/** Ten minutes per form, like the SDK's 2025 shim. */
-const ANSWER_TIMEOUT = 600_000;
 
 /** Any reply passes; `hostAsk` checks it right after. */
 const ANY_RESULT: StandardSchemaV1 = {

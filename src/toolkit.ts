@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { type Icon, type ToolCallContext, type ToolDefinition } from "./index.ts";
 import {
+  ANSWER_TIMEOUT,
   callTool,
   copyIcons,
   fillsOpenaiForms,
@@ -41,7 +42,7 @@ export interface ToolkitExtra {
   readonly sendRequest?: (
     request: never,
     resultSchema: never,
-    options?: { readonly signal?: AbortSignal },
+    options?: { readonly signal?: AbortSignal; readonly timeout?: number },
   ) => Promise<unknown>;
 }
 
@@ -306,7 +307,7 @@ function formAsk(
         await send(
           { method, params: { mode: "form", message, requestedSchema: requested } } as never,
           reply,
-          { signal: extra?.signal },
+          { signal: extra?.signal, timeout: ANSWER_TIMEOUT },
         ),
     ),
   };

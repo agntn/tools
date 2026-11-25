@@ -460,6 +460,9 @@ export function askForm(capabilities: unknown): AskForm {
 /** ChatGPT's form method on 2025 connections. */
 export const OPENAI_ELICIT = "openai/elicitation/create";
 
+/** Ten minutes per form, like SDK v2's 2025 shim, not SDK v1's one. */
+export const ANSWER_TIMEOUT = 600_000;
+
 /**
  * Whether a client declares ChatGPT's forms.
  *
