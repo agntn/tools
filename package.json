@@ -92,7 +92,7 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.84.2 <2",
     "@modelcontextprotocol/server": ">=2.2.0 <3",
-    "@oh-my-pi/pi-coding-agent": ">=18.0.0 <19",
+    "@oh-my-pi/pi-coding-agent": ">=18.0.0 <20",
     "@opencode/plugin": ">=2.3.0 <3",
     "ai": ">=7.0.0 <8",
     "h3-mcp": ">=0.2.0 <0.3",
