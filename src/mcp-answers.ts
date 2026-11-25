@@ -289,7 +289,7 @@ interface RoundState {
  * @returns {Promise<string>} The digest in hex.
  */
 async function fingerprint(question: HostQuestion): Promise<string> {
-  const text = JSON.stringify([question.message, question.requested]);
+  const text = JSON.stringify([question.message, question.openai]);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -384,13 +384,14 @@ function inputRequired(asking: Asking, state: RoundState): InputRequiredResult {
  */
 function elicitRequest(question: HostQuestion, form: AskForm): InputRequest {
   const { message } = question;
-  const requested = question.requested as ElicitRequestFormParams["requestedSchema"];
   if (form === "mcp") {
+    const requested = question.requested() as ElicitRequestFormParams["requestedSchema"];
     return {
       method: "elicitation/create",
       params: { mode: "form", message, requestedSchema: requested },
     };
   }
+  const requested = question.openai as ElicitRequestFormParams["requestedSchema"];
   return {
     method: "elicitation/create",
     params: {
@@ -485,7 +486,7 @@ export function openaiElicitRequest(question: HostQuestion): {
   params: ElicitRequestFormParams;
 } {
   const { message } = question;
-  const requestedSchema = question.requested as ElicitRequestFormParams["requestedSchema"];
+  const requestedSchema = question.openai as ElicitRequestFormParams["requestedSchema"];
   return { method: OPENAI_ELICIT, params: { mode: "form", message, requestedSchema } };
 }
 

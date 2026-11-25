@@ -303,9 +303,16 @@ function formAsk(
   const reply = z.looseObject({}) as never;
   return {
     ask: hostAsk(
-      async ({ message, requested }) =>
+      async ({ message, ...forms }) =>
         await send(
-          { method, params: { mode: "form", message, requestedSchema: requested } } as never,
+          {
+            method,
+            params: {
+              mode: "form",
+              message,
+              requestedSchema: openai ? forms.openai : forms.requested(),
+            },
+          } as never,
           reply,
           { signal: extra?.signal, timeout: ANSWER_TIMEOUT },
         ),

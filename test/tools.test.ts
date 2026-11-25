@@ -62,7 +62,7 @@ import {
   questionRound,
   type RoundRetry,
 } from "../src/mcp-answers.ts";
-import { hostAsk, requestedSchema, type HostQuestion } from "../src/questions.ts";
+import { hostAsk, openaiSchema, requestedSchema, type HostQuestion } from "../src/questions.ts";
 import { registerOmpTools, type OmpToolOptions } from "../src/omp.ts";
 import { registerPiTools, type PiToolOptions } from "../src/pi.ts";
 import {
@@ -2769,6 +2769,89 @@ const colorWire = {
   },
 };
 
+/** Two parts to pick from: one with a title, one with only a name. */
+const parts = [
+  { uri: "cad://parts/hex-bolt", name: "hex-bolt", title: "M6 hex bolt" },
+  { uri: "cad://parts/washer", name: "washer" },
+];
+
+const partsForm = Type.Object({
+  parts: Type.Array(Type.String({ format: "uri" }), {
+    "x-openai-input": { type: "resource", selection: "explicit", options: parts },
+  }),
+});
+
+/** `partsForm` as every client but ChatGPT gets it. */
+const partsWire = {
+  type: "object",
+  properties: {
+    parts: {
+      type: "array",
+      items: {
+        anyOf: [
+          { const: "cad://parts/hex-bolt", title: "M6 hex bolt" },
+          { const: "cad://parts/washer", title: "washer" },
+        ],
+      },
+    },
+  },
+  required: ["parts"],
+};
+
+/** `partsForm` as ChatGPT gets it: its picker, as written. */
+const chatgptPartsWire = {
+  type: "object",
+  properties: {
+    parts: {
+      type: "array",
+      items: { type: "string", format: "uri" },
+      "x-openai-input": { type: "resource", selection: "explicit", options: parts },
+    },
+  },
+  required: ["parts"],
+};
+
+/** A picker ChatGPT alone can show: no options, only uploads. */
+const uploadsForm = Type.Object({
+  parts: Type.Array(Type.String({ format: "uri" }), {
+    "x-openai-input": { type: "resource", selection: "implicit", options: [] },
+  }),
+});
+
+/** The forms `pickerOf` asks with. */
+const pickForms = {
+  parts: partsForm,
+  uploads: uploadsForm,
+  implicit: Type.Object({
+    parts: Type.Array(Type.String({ format: "uri" }), {
+      "x-openai-input": { type: "resource", selection: "implicit", options: parts },
+    }),
+  }),
+};
+
+/* `demo_parts`, asking which parts with one of `pickForms` and printing the picked URIs. */
+function pickerOf(form: keyof typeof pickForms) {
+  const schema = pickForms[form];
+  return defineTool({
+    name: "demo_parts",
+    title: "Demo Parts",
+    description: "Ask the user for some parts.",
+    effect: "read",
+    input: Type.Object({}),
+    async execute(_input, { ask }): Promise<ToolResult<null>> {
+      const say = (text: string): ToolResult<null> => ({
+        content: [{ type: "text", text }],
+        details: null,
+      });
+      if (!ask) return say("nobody to ask");
+      const answer = await ask({ message: "Which parts?", schema });
+      return say(answer.action === "accept" ? answer.content.parts.join(" ") : answer.action);
+    },
+  });
+}
+
+const picker = pickerOf("parts");
+
 const replies = [
   { action: "accept", content: { color: "red" } },
   { action: "accept", content: { count: 3, tags: ["b"], loud: true } },
@@ -2776,6 +2859,8 @@ const replies = [
 
 /** How a test client connects: the revision it insists on and the extensions it declares. */
 interface FormSetup {
+  /** What the server serves, `asker` by default. */
+  readonly tools?: readonly ToolDefinition[];
   /** Protocol revision to insist on, else the SDK's 2025 default. */
   readonly pin?: string;
   /** Whether the client declares MCP's `elicitation`, true by default. */
@@ -2869,7 +2954,7 @@ async function askingMcpClient(
   setup: FormSetup = {},
 ): Promise<{ client: Client; seen: unknown[] }> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const server = createMcpServer({ name: "demo", version: "0.0.0" }, [asker]);
+  const server = createMcpServer({ name: "demo", version: "0.0.0" }, setup.tools ?? [asker]);
   const asking = formClient(script, setup);
   open.push(server);
   await Promise.all([server.connect(serverTransport), asking.client.connect(clientTransport)]);
@@ -2915,7 +3000,7 @@ async function askingHttpClient(
   setup: FormSetup,
 ): Promise<{ client: Client; seen: unknown[] }> {
   const handler = createMcpHandler(() =>
-    createMcpServer({ name: "demo", version: "0.0.0" }, [asker]),
+    createMcpServer({ name: "demo", version: "0.0.0" }, setup.tools ?? [asker]),
   );
   const transport = new StreamableHTTPClientTransport(new URL("http://localhost/mcp"), {
     fetch: async (input, init) => await handler.fetch(new Request(input, init)),
@@ -2934,11 +3019,15 @@ async function askingHttpClient(
  */
 async function askingToolkitClient(
   script: readonly unknown[],
-  setup: Readonly<{ reads?: ToolkitReads; capabilities?: Readonly<Record<string, unknown>> }> = {},
+  setup: Readonly<{
+    reads?: ToolkitReads;
+    capabilities?: Readonly<Record<string, unknown>>;
+    tools?: readonly ToolDefinition[];
+  }> = {},
 ): Promise<AskingToolkit> {
   const { reads = { elicitation: true }, capabilities = { elicitation: { form: {} } } } = setup;
   const client = new SdkV1Client({ name: "test", version: "0.0.0" }, { capabilities });
-  const server = toolkitServer([asker], reads);
+  const server = toolkitServer(setup.tools ?? [asker], reads);
   const seen: unknown[] = [];
   const cancelled: string[] = [];
   const left = [...script];
@@ -3021,7 +3110,7 @@ describe("questions", () => {
     });
 
     expect(answer).toEqual({ action: "accept", content: { color: "green" } });
-    expect(shown.map(({ message, requested }) => ({ message, requested }))).toEqual([
+    expect(shown.map(({ message, requested }) => ({ message, requested: requested() }))).toEqual([
       { message: colorWire.message, requested: colorWire.requestedSchema },
     ]);
   });
@@ -3092,6 +3181,70 @@ describe("questions", () => {
     });
   });
 
+  it("gives ChatGPT the resource picker and everyone else its options as titled picks", () => {
+    const question = { message: "", schema: partsForm };
+    expect(openaiSchema(question)).toEqual(chatgptPartsWire);
+    expect(requestedSchema(question)).toEqual(partsWire);
+  });
+
+  it("keeps a resource pick's default and cleans the labels of its options", () => {
+    const hostile = "Hex\n\u001B]0;x\u0007bolt\u202E";
+    const [bolt] = parts;
+    const schema = Type.Object({
+      parts: Type.Array(Type.String(), {
+        default: [bolt?.uri],
+        "x-openai-input": { type: "resource", options: [{ ...bolt, title: hostile }] },
+      }),
+    });
+    const { properties } = requestedSchema({ message: "", schema });
+
+    expect(properties.parts).toEqual({
+      type: "array",
+      default: ["cad://parts/hex-bolt"],
+      items: { anyOf: [{ const: "cad://parts/hex-bolt", title: "Hex bolt" }] },
+    });
+    expect(openaiSchema({ message: "", schema }).properties.parts).toMatchObject({
+      "x-openai-input": { options: [{ uri: "cad://parts/hex-bolt", title: "Hex bolt" }] },
+    });
+  });
+
+  it("starts an implicit pick with every option ticked, as ChatGPT does", () => {
+    const schema = Type.Object({
+      parts: Type.Array(Type.String(), {
+        "x-openai-input": { type: "resource", selection: "implicit", options: parts },
+      }),
+    });
+    expect(requestedSchema({ message: "", schema }).properties.parts).toMatchObject({
+      default: ["cad://parts/hex-bolt", "cad://parts/washer"],
+    });
+    expect(openaiSchema({ message: "", schema }).properties.parts).not.toHaveProperty("default");
+  });
+
+  it("refuses a resource pick with no options, which only ChatGPT could show", () => {
+    const schema = Type.Object({
+      files: Type.Array(Type.String(), {
+        "x-openai-input": { type: "resource", selection: "implicit", options: [] },
+      }),
+    });
+    expect(() => requestedSchema({ message: "", schema })).toThrow(
+      new ToolDefinitionError(
+        'Question field "files" needs options: only ChatGPT can pick a resource without one',
+      ),
+    );
+  });
+
+  it("refuses an array of free strings and a picker option without a URI", () => {
+    const free = Type.Object({ tags: Type.Array(Type.String()) });
+    const nameless = Type.Object({
+      parts: Type.Array(Type.String(), {
+        "x-openai-input": { type: "resource", options: [{ name: "washer" }] },
+      }),
+    });
+    for (const schema of [free, nameless]) {
+      expect(() => openaiSchema({ message: "", schema })).toThrow(ToolDefinitionError);
+    }
+  });
+
   it("refuses a form elicitation can't show before anyone sees it", async () => {
     let asked = false;
     const ask = hostAsk(async () => {
@@ -3102,7 +3255,7 @@ describe("questions", () => {
 
     await expect(ask({ message: "Where?", schema: nested })).rejects.toThrow(
       new ToolDefinitionError(
-        'Question field "point" must be a string, number, integer, boolean, Type.Enum of strings or an array of one',
+        'Question field "point" must be a string, number, integer, boolean, Type.Enum of strings, an array of one or a resource pick',
       ),
     );
     expect(asked).toBe(false);
@@ -3521,6 +3674,63 @@ describe("questions", () => {
     await client.callTool({ name: "demo_ask", arguments: {} });
     expect(seen[0]).toEqual(colorWire);
   });
+
+  it("asks for several resources, ChatGPT with its picker and a plain client with titles", async () => {
+    const picked = { action: "accept", content: { parts: ["cad://parts/washer"] } };
+    const message = "Which parts?";
+    const plain = await askingMcpClient([picked], { tools: [picker] });
+    const legacy = await askingMcpClient([picked], { tools: [picker], extensions: CHATGPT });
+    const modern = await askingHttpClient([picked], {
+      tools: [picker],
+      pin: "2026-07-28",
+      extensions: CHATGPT,
+    });
+    const toolkit = await askingToolkitClient([picked], {
+      tools: [picker],
+      reads: { capabilities: true },
+      capabilities: { elicitation: { form: {} }, extensions: CHATGPT },
+    });
+    for (const { client } of [plain, legacy, modern, toolkit]) {
+      const result = await client.callTool({ name: "demo_parts", arguments: {} });
+      expect(firstText(result)).toBe("cad://parts/washer");
+    }
+    expect(toolkit.seen).toEqual([
+      openaiSeen({ mode: "form", message, requestedSchema: chatgptPartsWire }),
+    ]);
+    expect(plain.seen).toEqual([{ mode: "form", message, requestedSchema: partsWire }]);
+    expect(legacy.seen).toEqual([
+      openaiSeen({ mode: "form", message, requestedSchema: chatgptPartsWire }),
+    ]);
+    expect(modern.seen).toEqual([
+      {
+        mode: "form",
+        message,
+        requestedSchema: { type: "object", properties: {} },
+        _meta: { "openai/elicitation": { requestedSchema: chatgptPartsWire } },
+      },
+    ]);
+  });
+
+  it("shows ChatGPT a picker with uploads only, and refuses it to a plain client", async () => {
+    const picked = { action: "accept", content: { parts: ["file:///parts/bolt.stl"] } };
+    const uploader = pickerOf("uploads");
+    const chatgpt = await askingMcpClient([picked], { tools: [uploader], extensions: CHATGPT });
+    const plain = await askingMcpClient([picked], { tools: [uploader] });
+
+    const result = await chatgpt.client.callTool({ name: "demo_parts", arguments: {} });
+    expect(firstText(result)).toBe("file:///parts/bolt.stl");
+    expect(chatgpt.seen).toEqual([
+      openaiSeen({
+        mode: "form",
+        message: "Which parts?",
+        requestedSchema: openaiSchema({ message: "", schema: uploadsForm }),
+      }),
+    ]);
+    const refused = await plain.client.callTool({ name: "demo_parts", arguments: {} });
+    expect(refused.isError).toBe(true);
+    expect(firstText(refused)).toContain("only ChatGPT can pick a resource without one");
+    expect(plain.seen).toEqual([]);
+  });
 });
 
 /**
@@ -3586,6 +3796,31 @@ describe("questions in Pi and OMP", () => {
       "select Details: tags [[x] a | [ ] b | Done | (skip)] signal",
       "select Details: loud [Yes | No] signal",
       "input Details: note (Anything else)",
+    ]);
+  });
+
+  it("starts an implicit pick in Pi with every resource ticked", async () => {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [pickerOf("implicit")]);
+    const { drawn, ctx } = scriptedCtx(["[x] washer", "Done"]);
+    const result = await registered[0]?.execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(resultText(result as ToolResult)).toBe("cad://parts/hex-bolt");
+    expect(drawn[0]).toBe("select Which parts? [[x] M6 hex bolt | [x] washer | Done]");
+  });
+
+  it("toggles resources by their titles and answers with their URIs", async () => {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    registerPiTools(pi as unknown as PiExtensionAPI, [picker]);
+    const { drawn, ctx } = scriptedCtx(["[ ] washer", "Done"]);
+    const result = await registered[0]?.execute("call-1", {}, undefined, undefined, ctx as never);
+
+    expect(resultText(result as ToolResult)).toBe("cad://parts/washer");
+    expect(drawn).toEqual([
+      "select Which parts? [[ ] M6 hex bolt | [ ] washer | Done]",
+      "select Which parts? [[ ] M6 hex bolt | [x] washer | Done]",
     ]);
   });
 
