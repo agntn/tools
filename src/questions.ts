@@ -29,6 +29,8 @@ export interface RequestedSchema {
 export interface HostQuestion {
   readonly message: string;
   readonly requested: RequestedSchema;
+  /** The fields as ChatGPT reads them, resource pickers and all. */
+  readonly openai: RequestedSchema;
   readonly schema: TObject;
 }
 
@@ -57,6 +59,29 @@ const ROOT_KEYS = new Set([
  * @throws {ToolDefinitionError} When the root isn't an object or a field isn't flat.
  */
 export function requestedSchema(question: ToolQuestion): RequestedSchema {
+  return formOf(question, false);
+}
+
+/**
+ * The same form for ChatGPT, whose resource picker keeps its `x-openai-input`.
+ *
+ * @param question - The question.
+ * @returns {RequestedSchema} The form ChatGPT draws.
+ * @throws {ToolDefinitionError} Where {@link requestedSchema} throws.
+ */
+export function openaiSchema(question: ToolQuestion): RequestedSchema {
+  return formOf(question, true);
+}
+
+/**
+ * One form of a question, for ChatGPT or for everyone else.
+ *
+ * @param question - The question.
+ * @param openai - Whether ChatGPT reads it.
+ * @returns {RequestedSchema} The checked form.
+ * @throws {ToolDefinitionError} When the root isn't an object or a field isn't flat.
+ */
+function formOf(question: ToolQuestion, openai: boolean): RequestedSchema {
   const root: unknown = JSON.parse(JSON.stringify(question.schema));
   if (!isRecord(root) || root.type !== "object" || !isRecord(root.properties)) {
     throw new ToolDefinitionError("A question needs a Type.Object of fields");
@@ -68,7 +93,7 @@ export function requestedSchema(question: ToolQuestion): RequestedSchema {
     );
   }
   const properties = Object.fromEntries(
-    Object.entries(root.properties).map(([key, field]) => [key, flatField(key, field)]),
+    Object.entries(root.properties).map(([key, field]) => [key, flatField(key, field, openai)]),
   );
   const required = Array.isArray(root.required) ? root.required.map(String) : [];
   return { type: "object", properties, ...(required.length > 0 ? { required } : {}) };
@@ -79,20 +104,97 @@ export function requestedSchema(question: ToolQuestion): RequestedSchema {
  *
  * @param key - Field name, for the error.
  * @param field - Its schema, as JSON.
+ * @param openai - Whether ChatGPT reads it.
  * @returns {Node} The field, with `type` filled in for a string enum.
  * @throws {ToolDefinitionError} When the field is an object, a union or another nested shape.
  */
-function flatField(key: string, field: unknown): Node {
+function flatField(key: string, field: unknown, openai: boolean): Node {
   if (isRecord(field)) {
     if (isStringEnum(field)) return cleanLabels({ type: "string", ...field });
     if (typeof field.type === "string" && PRIMITIVES.has(field.type)) return cleanLabels(field);
-    if (field.type === "array" && isRecord(field.items) && isStringEnum(field.items)) {
-      return cleanLabels({ ...field, items: { type: "string", ...field.items } });
-    }
+    const several = field.type === "array" ? severalField(key, field, openai) : undefined;
+    if (several) return several;
   }
   throw new ToolDefinitionError(
-    `Question field ${JSON.stringify(key)} must be a string, number, integer, boolean, Type.Enum of strings or an array of one`,
+    `Question field ${JSON.stringify(key)} must be a string, number, integer, boolean, Type.Enum of strings, an array of one or a resource pick`,
   );
+}
+
+/**
+ * An array field: several picks from an enum, or several resources.
+ *
+ * @param key - Field name, for the error.
+ * @param field - The array's schema.
+ * @param openai - Whether ChatGPT reads it.
+ * @returns {Node | undefined} The field, or nothing for an array a form can't show.
+ * @throws {ToolDefinitionError} When a resource pick has no options for other clients.
+ */
+function severalField(key: string, field: Node, openai: boolean): Node | undefined {
+  const { items, "x-openai-input": input } = field;
+  if (!isRecord(items)) return undefined;
+  if (isStringEnum(items)) return cleanLabels({ ...field, items: { type: "string", ...items } });
+  const options = items.type === "string" ? resourceOptions(input) : undefined;
+  if (!options) return undefined;
+  if (openai) {
+    return cleanLabels({ ...field, "x-openai-input": { ...(input as Node), options } });
+  }
+  if (options.length === 0) {
+    throw new ToolDefinitionError(
+      `Question field ${JSON.stringify(key)} needs options: only ChatGPT can pick a resource without one`,
+    );
+  }
+  const anyOf = options.map((option) => ({ const: option.uri, title: resourceTitle(option) }));
+  return cleanLabels({ ...withoutPicker(field), items: { anyOf } });
+}
+
+/** One resource ChatGPT offers in a picker. */
+interface ResourceOption extends Node {
+  readonly uri: string;
+}
+
+/**
+ * The options of an `x-openai-input` resource picker, their labels cleaned.
+ *
+ * @param input - The field's `x-openai-input`.
+ * @returns {ResourceOption[] | undefined} Options with a `uri` each, or nothing for another input.
+ */
+function resourceOptions(input: unknown): ResourceOption[] | undefined {
+  if (!isRecord(input) || input.type !== "resource" || !Array.isArray(input.options)) {
+    return undefined;
+  }
+  const options = (input.options as readonly unknown[]).map(cleanBranch);
+  return options.every(isResource) ? options : undefined;
+}
+
+/**
+ * Whether a picker option is a resource with a URI.
+ *
+ * @param option - One entry of `options`.
+ * @returns {boolean} Whether it has a string `uri`.
+ */
+function isResource(option: unknown): option is ResourceOption {
+  return isRecord(option) && typeof option.uri === "string";
+}
+
+/**
+ * The line a resource gets where there's no picker: its `title`, `name` or URI.
+ *
+ * @param option - The resource.
+ * @returns {string} The label.
+ */
+function resourceTitle(option: ResourceOption): string {
+  const label = [option.title, option.name].find((value) => typeof value === "string");
+  return typeof label === "string" ? label : option.uri;
+}
+
+/**
+ * A field without ChatGPT's picker, which no other client reads.
+ *
+ * @param field - The array's schema.
+ * @returns {Node} Every other key.
+ */
+function withoutPicker(field: Node): Node {
+  return Object.fromEntries(Object.entries(field).filter(([key]) => key !== "x-openai-input"));
 }
 
 /**
@@ -183,7 +285,8 @@ export function hostAsk(ask: (question: HostQuestion) => Promise<unknown>): Tool
     readonly schema: Schema;
   }): Promise<ToolAnswer<Content>> => {
     const question = { message: sanitizeText(message), schema };
-    const reply = await ask({ ...question, requested: requestedSchema(question) });
+    const forms = { requested: requestedSchema(question), openai: openaiSchema(question) };
+    const reply = await ask({ ...question, ...forms });
     const answer = readAnswer(question, reply);
     if (!answer) throw new Error("The answer doesn't fit the question");
     return answer as ToolAnswer<Content>;

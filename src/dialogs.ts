@@ -152,8 +152,18 @@ async function promptOnce(prompt: Prompt): Promise<Reply> {
  */
 function choicesOf(field: Field): [unknown[], string[]] {
   if (Array.isArray(field.enum)) return [field.enum, field.enum.map(String)];
-  if (!Array.isArray(field.oneOf)) return [[], []];
-  const branches = (field.oneOf as readonly unknown[]).filter(
+  return titledChoices(field.oneOf);
+}
+
+/**
+ * Values and labels of titled choices, a `title` per `const`.
+ *
+ * @param titled - A field's `oneOf`, or the `anyOf` of an array's items.
+ * @returns {[unknown[], string[]]} Values and labels, both empty when there are none.
+ */
+function titledChoices(titled: unknown): [unknown[], string[]] {
+  if (!Array.isArray(titled)) return [[], []];
+  const branches = (titled as readonly unknown[]).filter(
     (branch): branch is Field => typeof branch === "object" && branch !== null && "const" in branch,
   );
   return [
@@ -190,16 +200,18 @@ async function pick(
  * Several picks: lines that toggle until `Done`, from the field's default, `(skip)` when optional.
  *
  * @param prompt - The array field and its dialogs.
- * @returns {Promise<Reply>} The picked values in the enum's order, `SKIP` or `CLOSED`.
+ * @returns {Promise<Reply>} The picked values in the list's order, `SKIP` or `CLOSED`.
  */
 async function toggle(prompt: Prompt): Promise<Reply> {
   const items = prompt.field.items as Field;
-  const values = (items.enum as readonly string[]).map(String);
+  const [values, labels] = Array.isArray(items.enum)
+    ? [items.enum.map(String), items.enum.map(String)]
+    : titledChoices(items.anyOf);
   const picked = new Set(Array.isArray(prompt.field.default) ? prompt.field.default : []);
   const ends = prompt.optional ? [DONE_LABEL, SKIP_LABEL] : [DONE_LABEL];
-  const ticked = (): string[] => values.filter((value) => picked.has(value));
+  const ticked = (): unknown[] => values.filter((value) => picked.has(value));
   for (;;) {
-    const lines = toggleLines(values, (value) => picked.has(value));
+    const lines = toggleLines(labels, (index) => picked.has(values[index]));
     const chosen = await prompt.ui.select(prompt.title, [...lines, ...ends], signalOption(prompt));
     const ending = endOfToggle(chosen, prompt.optional, ticked);
     if (ending !== undefined) return ending;
@@ -216,22 +228,26 @@ async function toggle(prompt: Prompt): Promise<Reply> {
  * @param ticked - The values ticked so far.
  * @returns {Reply} The field's reply, or `undefined` for a line that only toggles.
  */
-function endOfToggle(chosen: string | undefined, optional: boolean, ticked: () => string[]): Reply {
+function endOfToggle(
+  chosen: string | undefined,
+  optional: boolean,
+  ticked: () => unknown[],
+): Reply {
   if (chosen === undefined) return CLOSED;
   if (chosen === DONE_LABEL) return ticked();
   return optional && chosen === SKIP_LABEL ? SKIP : undefined;
 }
 
 /**
- * One `[x]` or `[ ]` line per value, each different from the rest.
+ * One `[x]` or `[ ]` line per choice, each different from the rest.
  *
- * @param values - The enum's values.
- * @param isPicked - Whether a value is ticked.
- * @returns {string[]} The lines in the enum's order.
+ * @param labels - What each choice says.
+ * @param isPicked - Whether the choice at an index is ticked.
+ * @returns {string[]} The lines in the list's order.
  */
-function toggleLines(values: readonly string[], isPicked: (value: string) => boolean): string[] {
+function toggleLines(labels: readonly string[], isPicked: (index: number) => boolean): string[] {
   return distinct(
-    values.map((value) => `${isPicked(value) ? "[x]" : "[ ]"} ${sanitizeLine(value)}`),
+    labels.map((label, index) => `${isPicked(index) ? "[x]" : "[ ]"} ${sanitizeLine(label)}`),
   );
 }
 
