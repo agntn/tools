@@ -9,5 +9,5 @@
     "skipLibCheck": false
   },
   /* ai, h3, pi and omp stay out: their hosts' own declarations fail without skipLibCheck. */
-  "files": ["dist/index.d.mts", "dist/cli.d.mts", "dist/mcp.d.mts"]
+  "files": ["dist/index.d.mts", "dist/cli.d.mts", "dist/mcp.d.mts", "dist/stdio.d.mts"]
 }

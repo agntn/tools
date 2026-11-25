@@ -46,6 +46,12 @@ export default defineConfig({
               package: "@earendil-works/pi-coding-agent",
             },
             { from: "package", name: ["Context", "ToolContext"], package: "@opencode/plugin" },
+            /* `serveStdio` takes the transport over and sets its handlers. */
+            {
+              from: "package",
+              name: ["Transport", "ServeStdioOptions"],
+              package: "@modelcontextprotocol/server",
+            },
             { from: "lib", name: ["AbortSignal", "Request"] },
           ],
           ignoreInferredTypes: true,
