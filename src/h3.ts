@@ -6,6 +6,7 @@ import type { JsonSchema, ToolDefinition as H3ToolDefinition } from "h3-mcp";
 
 import { type ToolCallContext, type ToolDefinition } from "./index.ts";
 import {
+  askForm,
   callAsking,
   canAsk,
   listTools,
@@ -85,7 +86,8 @@ interface AskingRequest {
  */
 function roundOf(mcp: AskingRequest | undefined): QuestionRound | undefined {
   if (mcp?.era !== "modern" || !canAsk(mcp.clientCapabilities)) return undefined;
-  return questionRound(mcp.inputResponses, mcp.requestState);
+  const { inputResponses: responses, requestState: state, clientCapabilities } = mcp;
+  return questionRound({ responses, state }, askForm(clientCapabilities));
 }
 
 /**
