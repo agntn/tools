@@ -5,7 +5,15 @@
 import { z } from "zod";
 
 import { type Icon, type ToolCallContext, type ToolDefinition } from "./index.ts";
-import { callTool, copyIcons, listTools, mcpHost, progressSteps } from "./mcp-answers.ts";
+import {
+  callTool,
+  copyIcons,
+  fillsOpenaiForms,
+  listTools,
+  mcpHost,
+  OPENAI_ELICIT,
+  progressSteps,
+} from "./mcp-answers.ts";
 import { hostAsk } from "./questions.ts";
 
 /** What SDK v1 keeps of the HTTP request. */
@@ -29,16 +37,9 @@ export interface ToolkitExtra {
       readonly message: string;
     };
   }) => Promise<void>;
-  /** Both schemas are `never`, so SDK v1's method fits whatever Zod and schema types it carries. */
+  /** All `never`: SDK v1 has never heard of ChatGPT's method. */
   readonly sendRequest?: (
-    request: {
-      readonly method: "elicitation/create";
-      readonly params: {
-        readonly mode: "form";
-        readonly message: string;
-        readonly requestedSchema: never;
-      };
-    },
+    request: never,
     resultSchema: never,
     options?: { readonly signal?: AbortSignal },
   ) => Promise<unknown>;
@@ -51,6 +52,11 @@ export type ToolkitElicitation = () => { readonly supports: (mode?: "form") => b
 export interface ToolkitOptions {
   /** Pass `useMcpElicitation` to give `execute` an `ask`. It runs in every handler. */
   readonly elicitation?: ToolkitElicitation;
+  /**
+   * The client capabilities, so ChatGPT gets its own method.
+   * Pass `() => useMcpServer().server.server.getClientCapabilities()`.
+   */
+  readonly capabilities?: () => unknown;
 }
 
 export type { McpHost } from "./mcp-answers.ts";
@@ -113,7 +119,7 @@ export function toToolkitTools(
     handler: async (args, extra) =>
       callTool(info, tools, entry.name, args, {
         ...callContext(extra),
-        ...formAsk(extra, options.elicitation),
+        ...formAsk(extra, options),
       }),
   }));
 }
@@ -278,26 +284,27 @@ function isHeader(name: string, value: string): boolean {
 
 /**
  * An `ask` on this call's own stream. The toolkit's `form()` wants a Zod shape, so only `supports`.
+ * ChatGPT gets `openai/elicitation/create` once `capabilities` say so.
  *
  * @param extra - The SDK's request extra, absent when a caller skips it.
- * @param elicitation - The toolkit's `useMcpElicitation`, when the server passed it.
+ * @param options - `useMcpElicitation` and `capabilities`, as passed.
  * @returns {Pick<ToolCallContext, "ask">} The `ask`, or nothing for a client that fills no forms.
  */
 function formAsk(
   extra: ToolkitExtra | undefined,
-  elicitation: ToolkitElicitation | undefined,
+  options: ToolkitOptions,
 ): Pick<ToolCallContext, "ask"> {
   const send = extra?.sendRequest;
-  if (send === undefined || elicitation?.().supports("form") !== true) return {};
+  if (send === undefined) return {};
+  const openai = fillsOpenaiForms(options.capabilities?.());
+  if (!openai && options.elicitation?.().supports("form") !== true) return {};
+  const method = openai ? OPENAI_ELICIT : "elicitation/create";
   const reply = z.looseObject({}) as never;
   return {
     ask: hostAsk(
       async ({ message, requested }) =>
         await send(
-          {
-            method: "elicitation/create",
-            params: { mode: "form", message, requestedSchema: requested as never },
-          },
+          { method, params: { mode: "form", message, requestedSchema: requested } } as never,
           reply,
           { signal: extra?.signal },
         ),
