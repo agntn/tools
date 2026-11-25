@@ -70,7 +70,7 @@ export {
  *
  * `refuse` turns calls away. Past a call that isn't idempotent, it says the call may have run.
  *
- * @param info - Name, version and optional title, description, icons and website, sent as given.
+ * @param info - Name, version and optional title, description, icons, website and instructions.
  * @param tools - Tools to serve.
  * @param options - The `refuse` guard.
  * @returns {Server} Unconnected MCP server.
@@ -83,7 +83,7 @@ export function createMcpServer(
 ): Server {
   const byName = indexTools(tools);
   const { refuse } = options;
-  const { name, version, title, description, icons, websiteUrl } = info;
+  const { name, version, title, description, icons, websiteUrl, instructions } = info;
   const server = new Server(
     {
       name,
@@ -93,7 +93,7 @@ export function createMcpServer(
       ...(icons === undefined ? {} : { icons: copyIcons(icons) }),
       websiteUrl,
     },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {} }, instructions },
   );
 
   server.setRequestHandler("tools/list", () => ({ tools: listTools(tools) }));

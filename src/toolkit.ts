@@ -133,6 +133,8 @@ export interface ToolkitServerInfo {
   readonly description?: string;
   readonly icons?: readonly Icon[];
   readonly websiteUrl?: string;
+  /** Stays off the card: `initialize` sends it beside `serverInfo`, never inside. */
+  readonly instructions?: string;
 }
 
 /** The card nuxt-agent-discovery serves at `/.well-known/mcp/server-card.json`, filled in place. */
@@ -163,8 +165,9 @@ export function serverCardHook(
     description,
   }));
   const ours = new Set(listed.map(({ name }) => name));
+  const { instructions: _instructions, ...shown } = info;
   const serverInfo = {
-    ...info,
+    ...shown,
     ...(info.icons === undefined ? {} : { icons: copyIcons(info.icons) }),
   };
   const theirs = (entry: unknown): boolean => {
