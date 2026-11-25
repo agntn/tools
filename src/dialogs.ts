@@ -89,11 +89,12 @@ async function fillForm(
   question: HostQuestion,
   signal: AbortSignal | undefined,
 ): Promise<unknown> {
-  const keys = Object.keys(question.requested.properties);
-  const required = new Set(question.requested.required);
+  const requested = question.requested();
+  const keys = Object.keys(requested.properties);
+  const required = new Set(requested.required);
   const content: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const key of keys) {
-    const field = question.requested.properties[key] ?? {};
+    const field = requested.properties[key] ?? {};
     const title = sanitizeLine(
       keys.length === 1 ? question.message : `${question.message}: ${labelOf(key, field)}`,
     );

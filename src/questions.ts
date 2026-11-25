@@ -28,7 +28,8 @@ export interface RequestedSchema {
 /** A question as a host gets it: the message cleaned, the fields for MCP and as TypeBox. */
 export interface HostQuestion {
   readonly message: string;
-  readonly requested: RequestedSchema;
+  /** The fields for MCP, built when a host asks: only ChatGPT can show some. */
+  readonly requested: () => RequestedSchema;
   /** The fields as ChatGPT reads them, resource pickers and all. */
   readonly openai: RequestedSchema;
   readonly schema: TObject;
@@ -144,7 +145,23 @@ function severalField(key: string, field: Node, openai: boolean): Node | undefin
     );
   }
   const anyOf = options.map((option) => ({ const: option.uri, title: resourceTitle(option) }));
-  return cleanLabels({ ...withoutPicker(field), items: { anyOf } });
+  return cleanLabels({
+    ...withoutPicker(field),
+    ...implicitDefault(input, options),
+    items: { anyOf },
+  });
+}
+
+/**
+ * The picks an implicit picker starts with: every option, as ChatGPT shows it.
+ *
+ * @param input - The field's `x-openai-input`.
+ * @param options - Its resources.
+ * @returns {Node} A `default` of every URI, or nothing for an explicit picker.
+ */
+function implicitDefault(input: unknown, options: readonly ResourceOption[]): Node {
+  const implicit = isRecord(input) && input.selection === "implicit";
+  return implicit ? { default: options.map((option) => option.uri) } : {};
 }
 
 /** One resource ChatGPT offers in a picker. */
@@ -285,8 +302,8 @@ export function hostAsk(ask: (question: HostQuestion) => Promise<unknown>): Tool
     readonly schema: Schema;
   }): Promise<ToolAnswer<Content>> => {
     const question = { message: sanitizeText(message), schema };
-    const forms = { requested: requestedSchema(question), openai: openaiSchema(question) };
-    const reply = await ask({ ...question, ...forms });
+    const openai = openaiSchema(question);
+    const reply = await ask({ ...question, openai, requested: () => requestedSchema(question) });
     const answer = readAnswer(question, reply);
     if (!answer) throw new Error("The answer doesn't fit the question");
     return answer as ToolAnswer<Content>;

@@ -385,7 +385,7 @@ function inputRequired(asking: Asking, state: RoundState): InputRequiredResult {
 function elicitRequest(question: HostQuestion, form: AskForm): InputRequest {
   const { message } = question;
   if (form === "mcp") {
-    const requested = question.requested as ElicitRequestFormParams["requestedSchema"];
+    const requested = question.requested() as ElicitRequestFormParams["requestedSchema"];
     return {
       method: "elicitation/create",
       params: { mode: "form", message, requestedSchema: requested },

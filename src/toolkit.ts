@@ -310,7 +310,7 @@ function formAsk(
             params: {
               mode: "form",
               message,
-              requestedSchema: openai ? forms.openai : forms.requested,
+              requestedSchema: openai ? forms.openai : forms.requested(),
             },
           } as never,
           reply,
