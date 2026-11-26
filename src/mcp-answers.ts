@@ -12,7 +12,6 @@ import type {
   Tool,
   ToolAnnotations,
 } from "@modelcontextprotocol/server";
-import { Value } from "typebox/value";
 
 import { causeLines } from "./causes.ts";
 import {
@@ -27,6 +26,7 @@ import {
   type ToolDefinition,
   type ToolResult,
 } from "./index.ts";
+import { checkDetails } from "./outputs.ts";
 import { hostAsk, readAnswer, type HostQuestion } from "./questions.ts";
 
 export interface McpServerInfo {
@@ -180,16 +180,11 @@ function answer(tool: ToolDefinition, result: ToolResult): CallToolResult {
     content: result.content,
     ...(result.isError === undefined ? {} : { isError: result.isError }),
   };
-  if (tool.output === undefined || result.isError === true) return content;
-  if (Value.Check(tool.output, result.details)) {
-    return { ...content, structuredContent: result.details as Record<string, unknown> };
-  }
-  return errorResult(
-    `${tool.name} returned details that don't match its output schema`,
-    ...[...Value.Errors(tool.output, result.details)].map(
-      (failure) => `at ${failure.instancePath || "/"}: ${failure.message}`,
-    ),
-  );
+  const checked = result.isError === true ? undefined : checkDetails(tool, result.details);
+  if (checked === undefined) return content;
+  return checked.ok
+    ? { ...content, structuredContent: checked.value }
+    : errorResult(...checked.lines);
 }
 
 /** The form a question goes out as: MCP's own, or ChatGPT's, whose fields ride in `_meta`. */

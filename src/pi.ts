@@ -27,8 +27,12 @@ import {
   ToolInputError,
   validateInput,
   type ToolDefinition,
+  type ToolResult,
 } from "./index.ts";
+import { checkDetails } from "./outputs.ts";
 import { hostContext } from "./updates.ts";
+
+type PiStructured = AgentToolResult<unknown>["structuredContent"];
 
 type Component = ReturnType<NonNullable<PiToolDefinition["renderCall"]>>;
 
@@ -141,16 +145,35 @@ export function registerPiTools(
       ...(tool.snippet === undefined ? {} : { promptSnippet: tool.snippet }),
       ...(tool.guidelines === undefined ? {} : { promptGuidelines: [...tool.guidelines] }),
       parameters: tool.input,
+      ...(tool.output === undefined ? {} : { outputSchema: tool.output }),
       ...reach(exposures.get(tool.name), options.namespace),
       async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<unknown>> {
         if (ask) await approve(tool, ask, params, signal, ctx);
         const context = hostContext(signal, onUpdate, ctx);
-        const result = await invokeTool(tool, params, context).catch(throwWithCauses);
+        const result = structured(
+          tool,
+          await invokeTool(tool, params, context).catch(throwWithCauses),
+        );
         if (result.isError && failures === "throw") throw new Error(resultText(result));
         return result;
       },
     });
   }
+}
+
+/**
+ * Checked details as `structuredContent`, what codemode scripts get instead of text.
+ *
+ * @param tool - Tool that answered.
+ * @param result - Its result.
+ * @returns {AgentToolResult<unknown>} The result, or an `isError` one on a schema mismatch.
+ */
+function structured(tool: ToolDefinition, result: ToolResult): AgentToolResult<unknown> {
+  const checked = result.isError === true ? undefined : checkDetails(tool, result.details);
+  if (checked === undefined) return result;
+  if (checked.ok) return { ...result, structuredContent: checked.value as PiStructured };
+  const text = checked.lines.map(sanitizeLine).join("\n");
+  return { content: [{ type: "text", text }], details: result.details, isError: true };
 }
 
 /**

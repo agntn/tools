@@ -2348,6 +2348,63 @@ describe("Pi adapter", () => {
     expect(register({})).not.toHaveProperty("renderCall");
   });
 
+  describe("structured output", () => {
+    /* `demo_count` as Pi registers it, and one call of it. */
+    function counted(options: PiToolOptions = {}) {
+      const registered: PiToolDefinition[] = [];
+      const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+      registerPiTools(pi as unknown as PiExtensionAPI, [count, echo], options);
+      const [definition, plain] = registered;
+      if (!definition || !plain) throw new Error("nothing registered");
+      const run = async (word: string): Promise<unknown> =>
+        await definition.execute("call-1", { word }, undefined, undefined, {} as never);
+      return { definition, plain, run };
+    }
+
+    it("declares output as outputSchema, and nothing for a tool without one", () => {
+      const { definition, plain } = counted();
+      expect(definition.outputSchema).toBe(count.output);
+      expect(plain).not.toHaveProperty("outputSchema");
+    });
+
+    it("hands checked details over as structuredContent next to the text", async () => {
+      expect(await counted().run("hey")).toEqual({
+        content: [{ type: "text", text: "hey has 3 letters" }],
+        details: { word: "hey", letters: 3 },
+        structuredContent: { word: "hey", letters: 3 },
+      });
+      const { plain } = counted();
+      const echoed = await plain.execute(
+        "call-1",
+        { word: "hi" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      expect(echoed).not.toHaveProperty("structuredContent");
+    });
+
+    it("leaves a failure without structuredContent", async () => {
+      const { run } = counted({ failures: "return" });
+      expect(await run("fail")).toEqual({
+        content: [{ type: "text", text: "cannot count fail" }],
+        details: {},
+        isError: true,
+      });
+    });
+
+    it("fails details that break the schema with MCP's lines", async () => {
+      const lines =
+        "demo_count returned details that don't match its output schema\nat /letters: must be integer";
+      await expect(counted().run("drift")).rejects.toThrow(new Error(lines));
+      expect(await counted({ failures: "return" }).run("drift")).toEqual({
+        content: [{ type: "text", text: lines }],
+        details: { word: "drift", letters: "five" },
+        isError: true,
+      });
+    });
+  });
+
   /* A Pi context whose dialog records each question and gives `answer`. */
   function dialog(answer: boolean, hasUI = true) {
     const asked: string[] = [];

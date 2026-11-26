@@ -159,7 +159,7 @@ export interface ToolDefinition<
   readonly icons?: readonly Icon[];
   /** MCP `_meta` in `tools/list`, such as `ui` or `openai/extensions`. No other surface reads it. */
   readonly meta?: Readonly<Record<string, unknown>>;
-  /** Schema of `details`. MCP lists it as `outputSchema` and sends them as `structuredContent`. */
+  /** Schema of `details`, which MCP and Pi send as `structuredContent` under its `outputSchema`. */
   readonly output?: TObject;
   /** Pi `promptSnippet`. */
   readonly snippet?: string;
