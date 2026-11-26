@@ -2348,6 +2348,28 @@ describe("Pi adapter", () => {
     expect(register({})).not.toHaveProperty("renderCall");
   });
 
+  it("hands Pi the hints MCP lists for a read", () => {
+    expect(register({}).annotations).toEqual({
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+  });
+
+  it("calls a tool that starts processes destructive in Pi too", () => {
+    const registered: PiToolDefinition[] = [];
+    const pi = { registerTool: (definition: PiToolDefinition) => registered.push(definition) };
+    const runner = { ...echo, effect: "exec" as const, openWorld: true };
+    registerPiTools(pi as unknown as PiExtensionAPI, [runner]);
+    expect(registered[0]?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+  });
+
   describe("structured output", () => {
     /* `demo_count` as Pi registers it, and one call of it. */
     function counted(options: PiToolOptions = {}) {
