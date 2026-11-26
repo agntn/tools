@@ -26,6 +26,7 @@ import {
   type ToolDefinition,
   type ToolResult,
 } from "./index.ts";
+import { toolHints } from "./hints.ts";
 import { checkDetails } from "./outputs.ts";
 import { hostAsk, readAnswer, type HostQuestion } from "./questions.ts";
 
@@ -72,19 +73,12 @@ export function mcpHost(from: Omit<McpHost, "mcp">): Pick<ToolCallContext, "host
 
 /**
  * Maps a tool's title and declared effect to MCP annotations. Claude Code reads its label here.
- * A process the tool starts can delete anything, so `exec` counts as destructive.
  *
  * @param tool - Tool to describe.
  * @returns {ToolAnnotations} Title and hints for the MCP client.
  */
 export function toolAnnotations(tool: ToolDefinition): ToolAnnotations {
-  return {
-    title: tool.title,
-    readOnlyHint: tool.effect === "read",
-    destructiveHint: tool.effect === "destructive" || tool.effect === "exec",
-    idempotentHint: tool.idempotent ?? tool.effect === "read",
-    openWorldHint: tool.openWorld ?? false,
-  };
+  return { title: tool.title, ...toolHints(tool) };
 }
 
 /**

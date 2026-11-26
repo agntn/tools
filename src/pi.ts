@@ -29,6 +29,7 @@ import {
   type ToolDefinition,
   type ToolResult,
 } from "./index.ts";
+import { toolHints } from "./hints.ts";
 import { checkDetails } from "./outputs.ts";
 import { hostContext } from "./updates.ts";
 
@@ -145,6 +146,7 @@ export function registerPiTools(
       ...(tool.snippet === undefined ? {} : { promptSnippet: tool.snippet }),
       ...(tool.guidelines === undefined ? {} : { promptGuidelines: [...tool.guidelines] }),
       parameters: tool.input,
+      annotations: toolHints(tool),
       ...(tool.output === undefined ? {} : { outputSchema: tool.output }),
       ...reach(exposures.get(tool.name), options.namespace),
       async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<unknown>> {

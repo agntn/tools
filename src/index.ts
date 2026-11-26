@@ -47,7 +47,7 @@ export interface ToolResult<Details = unknown> {
 }
 
 /**
- * What a call does to the world: MCP annotations, and approval on OMP, OpenCode and the AI SDK.
+ * What a call does to the world: MCP and Pi annotations, approval on OMP, OpenCode and the AI SDK.
  *
  * - `read` changes nothing.
  * - `write` changes state that the next call can undo or overwrite.
